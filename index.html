@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NWS Focused Forecast Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Spline+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=3" />
+</head>
+<body>
+  <div class="bg-orbit"></div>
+  <header class="site-header">
+    <div>
+      <p class="eyebrow">NOAA/NWS Graphical Forecast, Reimagined</p>
+      <h1>Focused Forecast Explorer</h1>
+      <p class="subhead">Track a handful of locations, sweep across time windows, and stay out of the 48-block maze.</p>
+    </div>
+    <div class="status" id="status">Ready</div>
+  </header>
+
+  <main class="grid">
+    <section class="panel locations">
+      <div class="panel-head">
+        <h2>Locations</h2>
+        <button id="refresh" class="ghost">Refresh data</button>
+      </div>
+      <div id="locationList" class="location-list"></div>
+      <div class="hint">Edit the locations array in <code>app.js</code> to customize your list.</div>
+    </section>
+
+    <section class="panel viz">
+      <div class="panel-head">
+        <div>
+          <h2 id="locationName">Loading...</h2>
+          <p id="locationMeta" class="meta">&nbsp;</p>
+        </div>
+        <div class="controls">
+          <label class="control">
+            <span>Window</span>
+            <input id="windowSize" type="range" min="12" max="168" value="24" step="12" />
+            <strong id="windowLabel">24h</strong>
+          </label>
+          <div class="chart-mode">
+            <span>Charts</span>
+            <button id="modeSeparate" class="ghost active" type="button">Separate</button>
+            <button id="modeOverlay" class="ghost" type="button">Overlay</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline">
+        <label class="control">
+          <span>Start</span>
+          <input id="startIndex" type="range" min="0" max="0" value="0" />
+        </label>
+        <div id="timeRange" class="time-range">&nbsp;</div>
+      </div>
+
+      <div id="charts" class="charts"></div>
+      <p id="overlayNote" class="overlay-note">Overlay uses one shared axis per group.</p>
+      <div id="legend" class="legend"></div>
+
+      <div class="details">
+        <h3>Window Details</h3>
+        <div id="detailCards" class="detail-cards"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    Data: National Weather Service API. Updated on demand from your location list.
+  </footer>
+
+  <div id="tooltip" class="tooltip" role="status" aria-live="polite"></div>
+
+  <script src="app.js?v=3"></script>
+</body>
+</html>
