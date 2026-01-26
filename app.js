@@ -97,8 +97,8 @@ function showTooltip(content, x, y) {
   const padding = 12;
   const maxX = window.innerWidth - tooltipEl.offsetWidth - padding;
   const maxY = window.innerHeight - tooltipEl.offsetHeight - padding;
-  const left = Math.min(x + 14, maxX);
-  const top = Math.min(y + 14, maxY);
+  const left = Math.min(x - tooltipEl.offsetWidth - 14, maxX);
+  const top = Math.min(y - tooltipEl.offsetHeight - 14, maxY);
   tooltipEl.style.left = `${Math.max(padding, left)}px`;
   tooltipEl.style.top = `${Math.max(padding, top)}px`;
   tooltipEl.classList.add("visible");
@@ -347,7 +347,7 @@ function formatUpdated(value) {
   if (!value) return "Updated time unavailable";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Updated time unavailable";
-  return `Updated ${date.toLocaleString()}`;
+  return `Updated ${date.toLocaleString(undefined, { timeZoneName: "short" })}`;
 }
 
 function humanizeKey(key) {
@@ -805,7 +805,7 @@ function drawChart(canvas, values, times, config) {
     max += 1;
   }
 
-  const padding = { top: 28, right: 16, bottom: 24, left: 46 };
+  const padding = { top: 14, right: 10, bottom: 28, left: 30 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
@@ -829,11 +829,6 @@ function drawChart(canvas, values, times, config) {
     ctx.lineTo(width - padding.right, y);
     ctx.stroke();
   }
-
-  ctx.fillStyle = "#12121a";
-  ctx.font = "12px Space Grotesk";
-  const label = `${config.label}${config.unit ? ` (${config.unit})` : ""}`;
-  ctx.fillText(label, padding.left, 18);
 
   if (!values.length) return;
 
@@ -913,7 +908,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   ctx.fillStyle = themeVar("--canvas");
   ctx.fillRect(0, 0, width, height);
 
-  const padding = { top: 28, right: 16, bottom: 24, left: 54 };
+  const padding = { top: 14, right: 10, bottom: 28, left: 38 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
@@ -970,10 +965,6 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     ctx.lineTo(width - padding.right, y);
     ctx.stroke();
   }
-
-  ctx.fillStyle = "#12121a";
-  ctx.font = "12px Space Grotesk";
-  ctx.fillText(`${title}${unit ? ` (${unit})` : ""}`, padding.left, 18);
 
   const allValues = series.flatMap((metric) =>
     metric.values.filter((value) => value !== null && value !== undefined)
@@ -1058,9 +1049,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   });
 
   if (!drewLine) {
-    ctx.fillStyle = "#56566d";
-    ctx.font = "14px Space Grotesk";
-    ctx.fillText("No data for this window.", padding.left, padding.top + chartHeight / 2);
+    return;
   }
 
   ctx.strokeStyle = themeVar("--chart-axis-strong");

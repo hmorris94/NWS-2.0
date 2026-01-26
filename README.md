@@ -1,18 +1,24 @@
-# Focused Forecast Explorer
+# NWS Forecast Explorer
 
-A lightweight, single-page NOAA/NWS forecast dashboard that lets you focus on a handful of locations, sweep time windows, and visualize multiple metrics without the 48-block grid.
+A lightweight NOAA/NWS forecast dashboard focused on a handful of locations with grouped graphs and daily summaries.
 
 ## Features
 
-- Curated location list for quick switching.
-- Sliding time window for hourly forecasts.
-- Overlay graphs grouped by metric category.
-- Hover tooltips and day separators.
+- Curated location list with saved selection.
+- Adjustable time window for hourly graphs.
+- Grouped overlays with tooltips and day markers.
+- Collapsible Forecast and Locations sections.
+- Day-by-day forecast cards with highs/lows.
+- Light/dark theme toggle.
 - Auto-refresh every 15 minutes.
 
 ## Quick Start
 
-Open `index.html` in a browser.
+Open `index.html` in a browser, or run:
+
+```bash
+python serve.py
+```
 
 ## Development
 
