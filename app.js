@@ -8,13 +8,11 @@ const locations = [
 const state = {
   selectedIndex: 0,
   data: [],
-  windowSize: 24,
+  windowSize: 96,
   startIndex: 0,
-  chartMode: "overlay",
   metricVisibility: {}
 };
 
-const statusEl = document.getElementById("status");
 const locationListEl = document.getElementById("locationList");
 const locationNameEl = document.getElementById("locationName");
 const locationMetaEl = document.getElementById("locationMeta");
@@ -23,12 +21,14 @@ const windowSizeEl = document.getElementById("windowSize");
 const windowLabelEl = document.getElementById("windowLabel");
 const startIndexEl = document.getElementById("startIndex");
 const timeRangeEl = document.getElementById("timeRange");
-const detailCardsEl = document.getElementById("detailCards");
 const chartsEl = document.getElementById("charts");
-const legendEl = document.getElementById("legend");
 const overlayNoteEl = document.getElementById("overlayNote");
-const modeSeparateBtn = document.getElementById("modeSeparate");
-const modeOverlayBtn = document.getElementById("modeOverlay");
+const forecastCardsEl = document.getElementById("forecastCards");
+const forecastSectionEl = document.getElementById("forecastSection");
+const forecastToggleEl = document.getElementById("forecastToggle");
+const locationsSectionEl = document.querySelector(".locations");
+const locationsToggleEl = document.getElementById("locationsToggle");
+const themeToggleBtn = document.getElementById("themeToggle");
 const tooltipEl = document.getElementById("tooltip");
 
 const colorPalette = [
@@ -45,7 +45,7 @@ const colorPalette = [
 ];
 
 const labelOverrides = {
-  probabilityOfPrecipitation: "Precip Probability",
+  probabilityOfPrecipitation: "Probability of Precipitation",
   quantitativePrecipitation: "Precip Amount",
   windSpeed: "Wind Speed",
   windGust: "Wind Gust",
@@ -55,7 +55,6 @@ const labelOverrides = {
 };
 
 const groupOrder = ["temperature", "precip-prob", "precip", "wind", "sky", "humidity", "pressure", "visibility"];
-const chartPadding = { top: 28, right: 16, bottom: 24, left: 46 };
 const overlayPadding = { top: 28, right: 16, bottom: 24, left: 54 };
 
 function getGroupForMetric(metric) {
@@ -92,9 +91,6 @@ function getGroupForMetric(metric) {
   return { id: `other-${metric.unit || "misc"}`, label: `Other${suffix}` };
 }
 
-function setStatus(text) {
-  statusEl.textContent = text;
-}
 
 function showTooltip(content, x, y) {
   tooltipEl.innerHTML = content;
@@ -112,10 +108,60 @@ function hideTooltip() {
   tooltipEl.classList.remove("visible");
 }
 
-function formatTooltipValue(value) {
+function themeVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  themeToggleBtn.textContent = theme === "dark" ? "Light mode" : "Dark mode";
+}
+
+function initTheme() {
+  const saved = localStorage.getItem("theme");
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (prefersDark ? "dark" : "light"));
+}
+
+function applyForecastState(collapsed) {
+  forecastSectionEl.classList.toggle("is-collapsed", collapsed);
+  forecastToggleEl.textContent = collapsed ? "Show" : "Hide";
+}
+
+function initForecastState() {
+  const saved = localStorage.getItem("forecastCollapsed");
+  const collapsed = saved === "true";
+  applyForecastState(collapsed);
+}
+
+function applyLocationsState(collapsed) {
+  const allowCollapse = window.matchMedia("(max-width: 960px)").matches;
+  const nextState = allowCollapse && collapsed;
+  locationsSectionEl.classList.toggle("is-collapsed", nextState);
+  locationsToggleEl.textContent = nextState ? "Show" : "Hide";
+  locationsToggleEl.disabled = !allowCollapse;
+}
+
+function initLocationsState() {
+  const saved = localStorage.getItem("locationsCollapsed");
+  const collapsed = saved === "true";
+  applyLocationsState(collapsed);
+}
+
+function formatTooltipValueWithUnit(value, unit, key) {
   if (value === null || value === undefined) return "--";
-  const rounded = Number(value.toFixed(1));
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  const normalized = (key || "").toLowerCase();
+  const isPrecip =
+    normalized.includes("precip") || normalized.includes("snow") || normalized.includes("ice");
+  const precision = isPrecip ? 2 : 1;
+  const rounded = Number(value.toFixed(precision));
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(precision);
+}
+
+function formatAxisValue(value, precision) {
+  const rounded = Number(value.toFixed(precision));
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(precision);
 }
 
 function getIndexFromEvent(event, canvas, count, padding) {
@@ -148,6 +194,41 @@ function getTickIntervalHours() {
   if (state.windowSize <= 12) return 1;
   if (state.windowSize <= 36) return 3;
   return 6;
+}
+
+function getTickIndicesByWidth(times, chartWidth, ctx) {
+  if (!times.length) return [];
+  const sampleLabel = times[0].toLocaleTimeString(undefined, { hour: "numeric" });
+  const labelWidth = ctx.measureText(sampleLabel).width;
+  const minGap = 16;
+  const maxLabels = Math.max(2, Math.floor(chartWidth / (labelWidth + minGap)));
+  const step = Math.max(1, Math.ceil((times.length - 1) / (maxLabels - 1)));
+  const indices = [];
+  for (let i = 0; i < times.length; i += step) {
+    indices.push(i);
+  }
+  if (indices[indices.length - 1] !== times.length - 1) {
+    indices.push(times.length - 1);
+  }
+  return indices;
+}
+
+function pruneTrailingOverlap(indices, times, chartWidth, ctx, padding) {
+  if (indices.length < 2) return indices;
+  const lastIndex = indices[indices.length - 1];
+  const prevIndex = indices[indices.length - 2];
+  const lastLabel = times[lastIndex]?.toLocaleTimeString(undefined, { hour: "numeric" }) ?? "";
+  const prevLabel = times[prevIndex]?.toLocaleTimeString(undefined, { hour: "numeric" }) ?? "";
+  const lastWidth = ctx.measureText(lastLabel).width;
+  const prevWidth = ctx.measureText(prevLabel).width;
+  const lastX = padding.left + (chartWidth * lastIndex) / (times.length - 1 || 1);
+  const prevX = padding.left + (chartWidth * prevIndex) / (times.length - 1 || 1);
+  const lastLeft = (padding.left + chartWidth) - lastWidth;
+  const prevRight = prevX - 8 + prevWidth;
+  if (prevRight > lastLeft) {
+    return indices.slice(0, -2).concat(lastIndex);
+  }
+  return indices;
 }
 
 function getMidnightIndices(times) {
@@ -190,7 +271,7 @@ function attachTooltip(canvas, payload) {
 
     if (payload.type === "single") {
       const value = payload.values[index];
-      const display = formatTooltipValue(value);
+      const display = formatTooltipValueWithUnit(value, payload.unit, payload.key);
       showTooltip(
         `<div class="tooltip-time">${timeLabel}</div><div>${payload.label}: ${display}</div>`,
         event.clientX,
@@ -203,7 +284,7 @@ function attachTooltip(canvas, payload) {
       .map((metric) => {
         const value = metric.values[index];
         if (value === null || value === undefined) return null;
-        const display = formatTooltipValue(value);
+        const display = formatTooltipValueWithUnit(value, metric.unit, metric.key);
         return `
           <div class="tooltip-row">
             <span class="tooltip-swatch" style="background:${metric.color}"></span>
@@ -318,6 +399,61 @@ function sanitizeValue(value) {
   return value;
 }
 
+function getMetricColor(key, index) {
+  const normalized = key.toLowerCase();
+  if (normalized.includes("quantitativeprecipitation")) return "#118ab2";
+  if (normalized.includes("snow")) return "#00bcd4";
+  if (normalized.includes("ice")) return "#8b5cf6";
+  if (normalized.includes("rain") || normalized.includes("liquid")) return "#00a676";
+  if (normalized.includes("drizzle")) return "#f59e0b";
+  if (normalized.includes("sleet") || normalized.includes("freezing")) return "#ef4444";
+  return colorPalette[index % colorPalette.length];
+}
+
+function buildDailyForecast(periods) {
+  const days = new Map();
+  periods.forEach((period) => {
+    const date = new Date(period.startTime);
+    if (Number.isNaN(date.getTime())) return;
+    const key = date.toISOString().slice(0, 10);
+    const entry = days.get(key) || { date, day: null, night: null };
+    if (period.isDaytime) entry.day = period;
+    else entry.night = period;
+    days.set(key, entry);
+  });
+
+  return Array.from(days.values()).map((entry) => {
+    const day = entry.day;
+    const night = entry.night;
+    const name =
+      (day && day.name) ||
+      (night && night.name) ||
+      entry.date.toLocaleDateString(undefined, { weekday: "long" });
+    const high = day ? day.temperature : null;
+    const low = night ? night.temperature : null;
+    const unit = (day && day.temperatureUnit) || (night && night.temperatureUnit) || "";
+    let blurb = "";
+    if (day && day.shortForecast && night && night.shortForecast) {
+      const combined = `${day.shortForecast} then ${night.shortForecast}`;
+      const tokens = combined
+        .split(/\s+then\s+/i)
+        .map((part) => part.trim())
+        .filter(Boolean);
+      const deduped = tokens.filter((part, index) => part !== tokens[index - 1]);
+      blurb = deduped.join(" then ");
+    } else {
+      blurb = (day && day.shortForecast) || (night && night.shortForecast) || "";
+    }
+    return { name, high, low, unit, blurb };
+  });
+}
+
+function formatTemp(temp, unit) {
+  if (temp === null || temp === undefined) return "--";
+  const label = unit === "F" ? "°F" : unit;
+  return `${temp}${label ? ` ${label}` : ""}`;
+}
+
 function shouldExcludeMetric(key) {
   const normalized = key.toLowerCase();
   return (
@@ -330,7 +466,8 @@ function shouldExcludeMetric(key) {
     normalized === "mixingheight" ||
     normalized === "visibility" ||
     normalized === "lowvisibilityoccurrenceriskindex" ||
-    normalized === "atmosphericdispersionindex"
+    normalized === "atmosphericdispersionindex" ||
+    normalized === "windchill"
   );
 }
 
@@ -371,6 +508,7 @@ async function fetchJson(url) {
 async function loadLocation(location) {
   const point = await fetchJson(`https://api.weather.gov/points/${location.lat},${location.lon}`);
   const forecastHourly = await fetchJson(point.properties.forecastHourly);
+  const forecast = await fetchJson(point.properties.forecast);
   const grid = await fetchJson(point.properties.forecastGridData);
   const updated =
     forecastHourly.properties.updated ||
@@ -417,6 +555,14 @@ async function loadLocation(location) {
     };
   });
 
+  const now = new Date();
+  const currentHour = new Date(now);
+  currentHour.setMinutes(0, 0, 0);
+  const trimmedHourly =
+    hourly.length && currentHour > hourly[0].time
+      ? hourly.filter((entry) => entry.time >= currentHour)
+      : hourly;
+
   const filteredMeta = metricMeta.filter((meta) =>
     hourly.some((entry) => entry.metrics[meta.key] !== null && entry.metrics[meta.key] !== undefined)
   );
@@ -427,14 +573,15 @@ async function loadLocation(location) {
       key: meta.key,
       label: meta.label,
       unit: meta.unit,
-      color: colorPalette[index % colorPalette.length]
+      color: getMetricColor(meta.key, index)
     }));
 
   return {
     ...location,
     updated,
-    hourly,
-    metrics
+    hourly: trimmedHourly,
+    metrics,
+    dailyForecast: buildDailyForecast(forecast.properties.periods)
   };
 }
 
@@ -456,6 +603,7 @@ function selectLocation(index) {
   state.selectedIndex = index;
   state.startIndex = 0;
   startIndexEl.value = "0";
+  localStorage.setItem("selectedLocation", state.data[index]?.name || "");
   renderLocations();
   ensureMetricVisibility(state.data[index]);
   updateSliders();
@@ -472,13 +620,6 @@ function setWindowSize(value) {
 function setStartIndex(value) {
   state.startIndex = clampStartIndex(value);
   startIndexEl.value = String(state.startIndex);
-  renderView();
-}
-
-function setChartMode(mode) {
-  state.chartMode = mode;
-  modeSeparateBtn.classList.toggle("active", mode === "separate");
-  modeOverlayBtn.classList.toggle("active", mode === "overlay");
   renderView();
 }
 
@@ -511,37 +652,20 @@ function renderView() {
   }
 
   renderCharts(windowData, loc);
-  renderDetails(windowData);
+  renderForecast(loc);
+  renderForecast(loc);
 }
 
 function renderCharts(windowData, location) {
   chartsEl.innerHTML = "";
-  legendEl.innerHTML = "";
 
   const series = buildSeries(location, windowData);
   const times = windowData.map((entry) => entry.time);
 
-  if (state.chartMode === "overlay") {
+  if (overlayNoteEl) {
     overlayNoteEl.style.display = "block";
-    renderOverlayGroups(series, times);
-  } else {
-    overlayNoteEl.style.display = "none";
-    legendEl.innerHTML = "";
-    const visibleSeries = series.filter((metric) => isMetricVisible(metric.key));
-    visibleSeries.forEach((metric) => {
-      const canvas = document.createElement("canvas");
-      canvas.height = 120;
-      chartsEl.appendChild(canvas);
-      drawChart(canvas, metric.values, times, metric);
-      attachTooltip(canvas, {
-        type: "single",
-        values: metric.values,
-        times,
-        label: `${metric.label}${metric.unit ? ` (${metric.unit})` : ""}`,
-        padding: chartPadding
-      });
-    });
   }
+  renderOverlayGroups(series, times);
 }
 
 function renderLegend(container, series) {
@@ -555,7 +679,7 @@ function renderLegend(container, series) {
     swatch.className = "legend-swatch";
     swatch.style.background = metric.color;
     const label = document.createElement("span");
-    label.textContent = `${metric.label}${metric.unit ? ` (${metric.unit})` : ""}`;
+    label.textContent = metric.label;
     button.appendChild(swatch);
     button.appendChild(label);
     button.addEventListener("click", () => toggleMetric(metric.key));
@@ -604,6 +728,17 @@ function renderOverlayGroups(series, times) {
   });
 
   sortedGroups.forEach((group) => {
+    if (group.id === "temperature") {
+      group.metrics.sort((a, b) => {
+        const aKey = a.key.toLowerCase();
+        const bKey = b.key.toLowerCase();
+        const aIsDew = aKey === "dewpoint";
+        const bIsDew = bKey === "dewpoint";
+        if (aIsDew && !bIsDew) return 1;
+        if (!aIsDew && bIsDew) return -1;
+        return a.label.localeCompare(b.label);
+      });
+    }
     const groupEl = document.createElement("div");
     groupEl.className = "chart-group";
 
@@ -649,7 +784,7 @@ function drawChart(canvas, values, times, config) {
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#fff";
+  ctx.fillStyle = themeVar("--canvas");
   ctx.fillRect(0, 0, width, height);
 
   const cleanValues = values.filter((v) => v !== null && v !== undefined);
@@ -661,6 +796,9 @@ function drawChart(canvas, values, times, config) {
   }
   if (config.unit === "in" || config.unit === "mph") {
     min = 0;
+  }
+  if (config.unit === "in") {
+    max = Math.max(max, 0.05);
   }
   if (min === max) {
     min -= 1;
@@ -674,7 +812,7 @@ function drawChart(canvas, values, times, config) {
   const midnightIndices = getMidnightIndices(times);
   midnightIndices.forEach((index) => {
     const x = padding.left + (chartWidth * index) / (values.length - 1 || 1);
-    ctx.strokeStyle = "rgba(18, 18, 26, 0.18)";
+    ctx.strokeStyle = themeVar("--chart-midnight");
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(x, padding.top);
@@ -682,7 +820,7 @@ function drawChart(canvas, values, times, config) {
     ctx.stroke();
   });
 
-  ctx.strokeStyle = "rgba(18, 18, 26, 0.1)";
+  ctx.strokeStyle = themeVar("--chart-grid");
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i += 1) {
     const y = padding.top + (chartHeight / 4) * i;
@@ -723,18 +861,43 @@ function drawChart(canvas, values, times, config) {
     ctx.fill();
   });
 
+  const isPrecipAxis =
+    config.unit === "in" ||
+    config.key.toLowerCase().includes("precip") ||
+    config.key.toLowerCase().includes("snow") ||
+    config.key.toLowerCase().includes("ice");
+  const precision = isPrecipAxis ? 2 : 0;
+  const minLabel = formatAxisValue(min, precision);
+  const maxLabel = formatAxisValue(max, precision);
   ctx.fillStyle = "#56566d";
   ctx.font = "11px Space Grotesk";
-  ctx.fillText(String(Math.round(max)), 10, padding.top + 6);
-  ctx.fillText(String(Math.round(min)), 10, padding.top + chartHeight);
+  ctx.textAlign = "right";
+  ctx.fillText(maxLabel, padding.left - 8, padding.top + 6);
+  ctx.fillText(minLabel, padding.left - 8, padding.top + chartHeight);
 
-  const tickIndices = getTickIndices(times, getTickIntervalHours());
-  tickIndices.forEach((index) => {
+  if (minLabel !== maxLabel) {
+    for (let i = 1; i < 4; i += 1) {
+      const label = max - ((max - min) / 4) * i;
+      const y = padding.top + (chartHeight / 4) * i + 4;
+      ctx.fillText(formatAxisValue(label, precision), padding.left - 8, y);
+    }
+  }
+  ctx.textAlign = "start";
+
+  let tickIndices = getTickIndicesByWidth(times, chartWidth, ctx);
+  tickIndices = pruneTrailingOverlap(tickIndices, times, chartWidth, ctx, padding);
+  tickIndices.forEach((index, position) => {
     const time = times[index];
     if (!time) return;
     const x = padding.left + (chartWidth * index) / (values.length - 1 || 1);
     const labelTime = time.toLocaleTimeString(undefined, { hour: "numeric" });
-    ctx.fillText(labelTime, x - 8, height - 6);
+    if (position === tickIndices.length - 1) {
+      ctx.textAlign = "right";
+      ctx.fillText(labelTime, width - padding.right, height - 6);
+      ctx.textAlign = "start";
+    } else {
+      ctx.fillText(labelTime, x - 8, height - 6);
+    }
   });
 }
 
@@ -747,7 +910,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#fff";
+  ctx.fillStyle = themeVar("--canvas");
   ctx.fillRect(0, 0, width, height);
 
   const padding = { top: 28, right: 16, bottom: 24, left: 54 };
@@ -755,13 +918,16 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   const chartHeight = height - padding.top - padding.bottom;
 
   const segments = getDaySegments(times);
+  const baseFontSize = 48;
+  const scale = Math.min(1, width < 800 ? width / 800 : 1);
+  const fontSize = Math.max(20, Math.round(baseFontSize * scale));
   segments.forEach((segment) => {
     if (!segment.label) return;
     const startX = padding.left + (chartWidth * segment.start) / (times.length - 1 || 1);
     const endX = padding.left + (chartWidth * segment.end) / (times.length - 1 || 1);
     const centerX = (startX + endX) / 2;
-    ctx.fillStyle = "rgba(18, 18, 26, 0.11)";
-    ctx.font = "48px Space Grotesk";
+    ctx.fillStyle = themeVar("--chart-watermark");
+    ctx.font = `${fontSize}px Space Grotesk`;
     ctx.textAlign = "center";
     const textWidth = ctx.measureText(segment.label).width;
     const leftEdge = centerX - textWidth / 2;
@@ -776,7 +942,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     ctx.textAlign = "start";
   });
 
-  ctx.strokeStyle = "rgba(18, 18, 26, 0.35)";
+  ctx.strokeStyle = themeVar("--chart-axis");
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(padding.left, padding.top);
@@ -787,7 +953,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   const midnightIndices = getMidnightIndices(times);
   midnightIndices.forEach((index) => {
     const x = padding.left + (chartWidth * index) / (times.length - 1 || 1);
-    ctx.strokeStyle = "rgba(18, 18, 26, 0.18)";
+    ctx.strokeStyle = themeVar("--chart-midnight");
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(x, padding.top);
@@ -795,7 +961,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     ctx.stroke();
   });
 
-  ctx.strokeStyle = "rgba(18, 18, 26, 0.1)";
+  ctx.strokeStyle = themeVar("--chart-grid");
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i += 1) {
     const y = padding.top + (chartHeight / 4) * i;
@@ -820,6 +986,9 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   }
   if (unit === "in" || unit === "mph") {
     min = 0;
+  }
+  if (unit === "in") {
+    max = Math.max(max, 0.05);
   }
   if (min === max) {
     min -= 1;
@@ -854,24 +1023,38 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     }
   });
 
+  const axisPrecision = unit === "in" ? 2 : 0;
+  const minLabel = formatAxisValue(min, axisPrecision);
+  const maxLabel = formatAxisValue(max, axisPrecision);
   ctx.fillStyle = "#56566d";
   ctx.font = "11px Space Grotesk";
-  ctx.fillText(String(Math.round(max)), 8, padding.top + 6);
-  ctx.fillText(String(Math.round(min)), 8, padding.top + chartHeight);
+  ctx.textAlign = "right";
+  ctx.fillText(maxLabel, padding.left - 8, padding.top + 6);
+  ctx.fillText(minLabel, padding.left - 8, padding.top + chartHeight);
 
-  for (let i = 1; i < 4; i += 1) {
-    const label = max - ((max - min) / 4) * i;
-    const y = padding.top + (chartHeight / 4) * i + 4;
-    ctx.fillText(label.toFixed(1), 6, y);
+  if (minLabel !== maxLabel) {
+    for (let i = 1; i < 4; i += 1) {
+      const label = max - ((max - min) / 4) * i;
+      const y = padding.top + (chartHeight / 4) * i + 4;
+      ctx.fillText(formatAxisValue(label, axisPrecision), padding.left - 8, y);
+    }
   }
+  ctx.textAlign = "start";
 
-  const tickIndices = getTickIndices(times, getTickIntervalHours());
-  tickIndices.forEach((index) => {
+  let tickIndices = getTickIndicesByWidth(times, chartWidth, ctx);
+  tickIndices = pruneTrailingOverlap(tickIndices, times, chartWidth, ctx, padding);
+  tickIndices.forEach((index, position) => {
     const time = times[index];
     if (!time) return;
     const x = padding.left + (chartWidth * index) / (times.length - 1 || 1);
     const labelTime = time.toLocaleTimeString(undefined, { hour: "numeric" });
-    ctx.fillText(labelTime, x - 8, height - 6);
+    if (position === tickIndices.length - 1) {
+      ctx.textAlign = "right";
+      ctx.fillText(labelTime, width - padding.right, height - 6);
+      ctx.textAlign = "start";
+    } else {
+      ctx.fillText(labelTime, x - 8, height - 6);
+    }
   });
 
   if (!drewLine) {
@@ -880,7 +1063,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     ctx.fillText("No data for this window.", padding.left, padding.top + chartHeight / 2);
   }
 
-  ctx.strokeStyle = "rgba(18, 18, 26, 0.6)";
+  ctx.strokeStyle = themeVar("--chart-axis-strong");
   ctx.lineWidth = 1.6;
   ctx.beginPath();
   ctx.moveTo(padding.left, padding.top);
@@ -897,7 +1080,7 @@ function drawEmptyOverlay(canvas, message) {
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#fff";
+  ctx.fillStyle = themeVar("--canvas");
   ctx.fillRect(0, 0, width, height);
   ctx.fillStyle = "#56566d";
   ctx.font = "14px Space Grotesk";
@@ -908,39 +1091,43 @@ function getMetricValue(entry, key) {
   return entry.metrics[key] ?? null;
 }
 
-function renderDetails(windowData) {
-  detailCardsEl.innerHTML = "";
-  windowData.slice(0, 6).forEach((item) => {
-    const temp = getMetricValue(item, "temperature");
-    const windSpeed = getMetricValue(item, "windSpeed") ?? normalizeWindSpeed(item.windSpeedText);
-    const pop = getMetricValue(item, "probabilityOfPrecipitation");
-    const sky = getMetricValue(item, "skyCover");
-
+function renderForecast(location) {
+  forecastCardsEl.innerHTML = "";
+  const daily = location.dailyForecast || [];
+  daily.slice(0, 7).forEach((day) => {
     const card = document.createElement("div");
-    card.className = "detail-card";
+    card.className = "forecast-card";
+    const high = formatTemp(day.high, day.unit);
+    const low = formatTemp(day.low, day.unit);
+    const rangeText = `High ${high} / Low ${low}`;
     card.innerHTML = `
-      <h4>${item.time.toLocaleString(undefined, { weekday: "short", hour: "numeric" })}</h4>
-      <p>${item.shortForecast}</p>
-      <p>Temp: ${temp ?? "--"} | Wind: ${windSpeed ?? "--"} mph ${item.windDirection ?? ""}</p>
-      <p>PoP: ${pop ?? "--"}% | Sky: ${sky ?? "--"}%</p>
+      <h4>${day.name}</h4>
+      <p>${rangeText}</p>
+      <p>${day.blurb || "--"}</p>
     `;
-    detailCardsEl.appendChild(card);
+    forecastCardsEl.appendChild(card);
   });
 }
 
 async function loadAll() {
   try {
-    setStatus("Fetching NOAA data...");
+    refreshBtn.classList.add("is-loading");
     state.data = await Promise.all(locations.map(loadLocation));
+    const savedLocation = localStorage.getItem("selectedLocation");
+    if (savedLocation) {
+      const matchIndex = state.data.findIndex((loc) => loc.name === savedLocation);
+      if (matchIndex >= 0) {
+        state.selectedIndex = matchIndex;
+      }
+    }
     ensureMetricVisibility(state.data[state.selectedIndex]);
     renderLocations();
-    setChartMode(state.chartMode);
     updateSliders();
     renderView();
-    setStatus("Forecasts ready");
   } catch (err) {
-    setStatus("Failed to load data");
     console.error(err);
+  } finally {
+    refreshBtn.classList.remove("is-loading");
   }
 }
 
@@ -991,19 +1178,36 @@ refreshBtn.addEventListener("click", () => {
   loadAll();
 });
 
-
-modeSeparateBtn.addEventListener("click", () => {
-  setChartMode("separate");
-});
-
-modeOverlayBtn.addEventListener("click", () => {
-  setChartMode("overlay");
-});
-
-window.addEventListener("resize", () => {
+themeToggleBtn.addEventListener("click", () => {
+  const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  const next = current === "dark" ? "light" : "dark";
+  localStorage.setItem("theme", next);
+  applyTheme(next);
   renderView();
 });
 
+forecastToggleEl.addEventListener("click", () => {
+  const collapsed = !forecastSectionEl.classList.contains("is-collapsed");
+  localStorage.setItem("forecastCollapsed", String(collapsed));
+  applyForecastState(collapsed);
+});
+
+locationsToggleEl.addEventListener("click", () => {
+  const collapsed = !locationsSectionEl.classList.contains("is-collapsed");
+  localStorage.setItem("locationsCollapsed", String(collapsed));
+  applyLocationsState(collapsed);
+});
+
+
+window.addEventListener("resize", () => {
+  renderView();
+  const collapsed = localStorage.getItem("locationsCollapsed") === "true";
+  applyLocationsState(collapsed);
+});
+
+initTheme();
+initForecastState();
+initLocationsState();
 loadAll();
 
 setInterval(() => {
