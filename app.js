@@ -55,7 +55,28 @@ const labelOverrides = {
 };
 
 const groupOrder = ["temperature", "precip-prob", "precip", "wind", "sky", "humidity", "pressure", "visibility"];
-const overlayPadding = { top: 28, right: 16, bottom: 24, left: 54 };
+const overlayChartPadding = { top: 14, right: 10, bottom: 28, left: 38 };
+const overlayPadding = overlayChartPadding;
+
+const interactionState = {
+  isInteracting: false,
+  isPanning: false,
+  panStartX: 0,
+  panStartY: 0,
+  panStartIndex: 0,
+  dragMode: null,
+  activePointers: new Map(),
+  pinchStartDistance: 0,
+  pinchStartWindow: 0,
+  pinchAnchorRatio: 0,
+  wheelTimeout: null,
+  rafToken: null
+};
+
+const chartScene = {
+  locationName: "",
+  instances: []
+};
 
 function getGroupForMetric(metric) {
   const key = metric.key.toLowerCase();
@@ -173,6 +194,17 @@ function getIndexFromEvent(event, canvas, count, padding) {
   return Math.round((clamped / chartWidth) * (count - 1));
 }
 
+function getIndexFromEventWindow(event, canvas, count, padding, startIndex, windowSize) {
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const chartWidth = rect.width - padding.left - padding.right;
+  if (chartWidth <= 0 || count <= 1 || windowSize <= 1) return startIndex;
+  const clamped = Math.min(Math.max(x - padding.left, 0), chartWidth);
+  const ratio = clamped / chartWidth;
+  const index = startIndex + ratio * (windowSize - 1);
+  return Math.max(0, Math.min(count - 1, Math.round(index)));
+}
+
 function getTickIndices(times, intervalHours = 6) {
   const indices = [];
   times.forEach((time, index) => {
@@ -264,7 +296,15 @@ function getDaySegments(times) {
 
 function attachTooltip(canvas, payload) {
   canvas.addEventListener("mousemove", (event) => {
-    const index = getIndexFromEvent(event, canvas, payload.times.length, payload.padding);
+    if (interactionState.isInteracting) return;
+    const index = getIndexFromEventWindow(
+      event,
+      canvas,
+      payload.times.length,
+      payload.padding,
+      state.startIndex,
+      state.windowSize
+    );
     const time = payload.times[index];
     if (!time) return;
     const timeLabel = time.toLocaleString(undefined, { weekday: "short", hour: "numeric" });
@@ -281,6 +321,7 @@ function attachTooltip(canvas, payload) {
     }
 
     const rows = payload.series
+      .filter((metric) => isMetricVisible(metric.key))
       .map((metric) => {
         const value = metric.values[index];
         if (value === null || value === undefined) return null;
@@ -301,6 +342,156 @@ function attachTooltip(canvas, payload) {
 
   canvas.addEventListener("mouseleave", hideTooltip);
   canvas.addEventListener("blur", hideTooltip);
+}
+
+function getAnchorRatioFromClientX(canvas, clientX) {
+  const rect = canvas.getBoundingClientRect();
+  const chartWidth = rect.width - overlayChartPadding.left - overlayChartPadding.right;
+  if (chartWidth <= 0) return 0.5;
+  const localX = clientX - rect.left - overlayChartPadding.left;
+  return Math.min(1, Math.max(0, localX / chartWidth));
+}
+
+function zoomWindow(targetWindow, anchorRatio) {
+  const loc = state.data[state.selectedIndex];
+  if (!loc) return;
+  const maxWindow = Math.max(1, loc.hourly.length);
+  const minWindow = Math.min(12, maxWindow);
+  const nextWindow = clampWindowSize(targetWindow, maxWindow, minWindow);
+  const anchorIndex = state.startIndex + anchorRatio * state.windowSize;
+  const nextStart = clampStartIndex(anchorIndex - anchorRatio * nextWindow, nextWindow);
+  if (nextWindow === state.windowSize && nextStart === state.startIndex) return;
+  state.windowSize = nextWindow;
+  state.startIndex = nextStart;
+  updateSliders();
+  scheduleInteractionRender();
+}
+
+function attachPanZoom(canvas) {
+  canvas.style.touchAction = "pan-y";
+
+  canvas.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      interactionState.isInteracting = true;
+      clearTimeout(interactionState.wheelTimeout);
+      const deltaScale =
+        event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY;
+      const zoomFactor = Math.exp(-deltaScale * 0.002);
+      const anchorRatio = getAnchorRatioFromClientX(canvas, event.clientX);
+      zoomWindow(state.windowSize * zoomFactor, anchorRatio);
+      interactionState.wheelTimeout = setTimeout(() => {
+        interactionState.isInteracting = false;
+      }, 160);
+    },
+    { passive: false }
+  );
+
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    canvas.setPointerCapture(event.pointerId);
+    interactionState.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    interactionState.isInteracting = true;
+    hideTooltip();
+
+    if (interactionState.activePointers.size === 1) {
+      interactionState.dragMode = event.pointerType === "mouse" ? "pan" : null;
+      interactionState.isPanning = event.pointerType === "mouse";
+      interactionState.panStartX = event.clientX;
+      interactionState.panStartY = event.clientY;
+      interactionState.panStartIndex = state.startIndex;
+    }
+
+    if (interactionState.activePointers.size === 2) {
+      interactionState.isPanning = false;
+      const points = Array.from(interactionState.activePointers.values());
+      interactionState.pinchStartDistance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+      interactionState.pinchStartWindow = state.windowSize;
+      const centerX = (points[0].x + points[1].x) / 2;
+      interactionState.pinchAnchorRatio = getAnchorRatioFromClientX(canvas, centerX);
+    }
+  });
+
+  canvas.addEventListener("pointermove", (event) => {
+    if (!interactionState.activePointers.has(event.pointerId)) return;
+    interactionState.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (interactionState.activePointers.size === 1) {
+      const dx = event.clientX - interactionState.panStartX;
+      const dy = event.clientY - interactionState.panStartY;
+      if (interactionState.dragMode === null && event.pointerType !== "mouse") {
+        const distance = Math.hypot(dx, dy);
+        if (distance < 6) return;
+        if (Math.abs(dy) > Math.abs(dx) * 1.2) {
+          interactionState.dragMode = "scroll";
+          interactionState.isPanning = false;
+          interactionState.isInteracting = false;
+          try {
+            canvas.releasePointerCapture(event.pointerId);
+          } catch (err) {
+            // Ignore if capture is not active.
+          }
+          return;
+        }
+        interactionState.dragMode = "pan";
+        interactionState.isPanning = true;
+      }
+    }
+
+    if (interactionState.activePointers.size === 1 && interactionState.isPanning) {
+      const rect = canvas.getBoundingClientRect();
+      const chartWidth = rect.width - overlayChartPadding.left - overlayChartPadding.right;
+      if (chartWidth <= 0) return;
+      const dx = event.clientX - interactionState.panStartX;
+      const deltaIndex = (-dx / chartWidth) * state.windowSize;
+      const nextStart = clampStartIndex(interactionState.panStartIndex + deltaIndex, state.windowSize);
+      if (nextStart !== state.startIndex) {
+        state.startIndex = nextStart;
+        updateSliders();
+        scheduleInteractionRender();
+      }
+      event.preventDefault();
+      return;
+    }
+
+    if (interactionState.activePointers.size === 2) {
+      const points = Array.from(interactionState.activePointers.values());
+      const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+      const centerX = (points[0].x + points[1].x) / 2;
+      const anchorRatio = getAnchorRatioFromClientX(canvas, centerX);
+      if (interactionState.pinchStartDistance > 0) {
+        const scale = distance / interactionState.pinchStartDistance;
+        const nextWindow = interactionState.pinchStartWindow / scale;
+        zoomWindow(nextWindow, anchorRatio);
+      }
+      event.preventDefault();
+    }
+  });
+
+  const endPointerInteraction = (event) => {
+    if (interactionState.activePointers.has(event.pointerId)) {
+      interactionState.activePointers.delete(event.pointerId);
+    }
+    if (interactionState.activePointers.size === 1) {
+      const remaining = Array.from(interactionState.activePointers.values())[0];
+      interactionState.dragMode = null;
+      interactionState.isPanning = true;
+      interactionState.panStartX = remaining.x;
+      interactionState.panStartY = remaining.y;
+      interactionState.panStartIndex = state.startIndex;
+      return;
+    }
+    if (interactionState.activePointers.size === 0) {
+      interactionState.isPanning = false;
+      interactionState.dragMode = null;
+      interactionState.isInteracting = false;
+    }
+  };
+
+  canvas.addEventListener("pointerup", endPointerInteraction);
+  canvas.addEventListener("pointercancel", endPointerInteraction);
+  canvas.addEventListener("pointerleave", endPointerInteraction);
 }
 
 function formatTimeRange(start, end) {
@@ -471,11 +662,24 @@ function shouldExcludeMetric(key) {
   );
 }
 
-function clampStartIndex(value) {
+function clampStartIndex(value, windowSize = state.windowSize) {
   const loc = state.data[state.selectedIndex];
   if (!loc) return 0;
-  const maxStart = Math.max(0, loc.hourly.length - state.windowSize);
-  return Math.max(0, Math.min(value, maxStart));
+  const maxStart = Math.max(0, loc.hourly.length - windowSize);
+  return Math.max(0, Math.min(Math.round(value), maxStart));
+}
+
+function clampWindowSize(value, maxWindow, minWindow) {
+  if (!Number.isFinite(value)) return minWindow;
+  return Math.max(minWindow, Math.min(Math.round(value), maxWindow));
+}
+
+function scheduleInteractionRender() {
+  if (interactionState.rafToken) return;
+  interactionState.rafToken = requestAnimationFrame(() => {
+    interactionState.rafToken = null;
+    renderView({ rebuild: false });
+  });
 }
 
 function ensureMetricVisibility(location) {
@@ -576,11 +780,33 @@ async function loadLocation(location) {
       color: getMetricColor(meta.key, index)
     }));
 
+  const metricExtents = {};
+  const groupExtents = {};
+  metrics.forEach((metric) => {
+    const values = trimmedHourly
+      .map((entry) => entry.metrics[metric.key])
+      .filter((value) => value !== null && value !== undefined);
+    if (!values.length) return;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    metricExtents[metric.key] = { min, max };
+    const group = getGroupForMetric(metric);
+    const groupKey = `${group.id}|${metric.unit || "unitless"}`;
+    if (!groupExtents[groupKey]) {
+      groupExtents[groupKey] = { min, max };
+    } else {
+      groupExtents[groupKey].min = Math.min(groupExtents[groupKey].min, min);
+      groupExtents[groupKey].max = Math.max(groupExtents[groupKey].max, max);
+    }
+  });
+
   return {
     ...location,
     updated,
     hourly: trimmedHourly,
     metrics,
+    metricExtents,
+    groupExtents,
     dailyForecast: buildDailyForecast(forecast.properties.periods)
   };
 }
@@ -631,9 +857,10 @@ function buildSeries(location, windowData) {
   }));
 }
 
-function renderView() {
+function renderView(options = {}) {
   const loc = state.data[state.selectedIndex];
   if (!loc) return;
+  const { rebuild = true } = options;
 
   state.startIndex = clampStartIndex(state.startIndex);
   startIndexEl.value = String(state.startIndex);
@@ -651,21 +878,37 @@ function renderView() {
     timeRangeEl.textContent = "No data for this window";
   }
 
-  renderCharts(windowData, loc);
+  renderCharts(loc, rebuild);
   renderForecast(loc);
   renderForecast(loc);
 }
 
-function renderCharts(windowData, location) {
-  chartsEl.innerHTML = "";
+function buildFullSeries(location) {
+  return location.metrics.map((meta) => ({
+    ...meta,
+    values: location.hourly.map((entry) => entry.metrics[meta.key])
+  }));
+}
 
-  const series = buildSeries(location, windowData);
-  const times = windowData.map((entry) => entry.time);
+function renderCharts(location, rebuild = true) {
+  if (!location) return;
+  const needsRebuild = rebuild || chartScene.locationName !== location.name || !chartScene.instances.length;
 
-  if (overlayNoteEl) {
-    overlayNoteEl.style.display = "block";
+  if (needsRebuild) {
+    chartsEl.innerHTML = "";
+    chartScene.instances = [];
+    chartScene.locationName = location.name;
+
+    const series = buildFullSeries(location);
+    if (overlayNoteEl) {
+      overlayNoteEl.style.display = "block";
+    }
+    buildOverlayScene(series, location);
   }
-  renderOverlayGroups(series, times);
+
+  chartScene.instances.forEach((instance) => {
+    drawOverlayInstance(instance);
+  });
 }
 
 function renderLegend(container, series) {
@@ -688,7 +931,7 @@ function renderLegend(container, series) {
   });
 }
 
-function renderOverlayGroups(series, times) {
+function buildOverlayScene(series, location) {
   const grouped = new Map();
   series.forEach((metric) => {
     const group = getGroupForMetric(metric);
@@ -758,27 +1001,36 @@ function renderOverlayGroups(series, times) {
 
     chartsEl.appendChild(groupEl);
 
-    const visibleSeries = group.metrics.filter((metric) => isMetricVisible(metric.key));
-    requestAnimationFrame(() => {
-      if (visibleSeries.length) {
-        drawOverlayChart(canvas, visibleSeries, times, group.label, group.unit);
-      } else {
-        drawEmptyOverlay(canvas, "Select metrics in the legend to show this chart.");
-      }
-      attachTooltip(canvas, {
-        type: "overlay",
-        series: visibleSeries,
-        times,
-        padding: overlayPadding
-      });
+    const extentKey = `${group.id}|${group.unit || "unitless"}`;
+    const fixedExtent = location.groupExtents?.[extentKey] || null;
+    const instance = {
+      groupId: group.id,
+      label: group.label,
+      unit: group.unit,
+      canvas,
+      ctx: canvas.getContext("2d"),
+      series: group.metrics,
+      times: location.hourly.map((entry) => entry.time),
+      extent: fixedExtent,
+      yValues: new Map(),
+      layout: null
+    };
+
+    attachTooltip(canvas, {
+      type: "overlay",
+      series: instance.series,
+      times: instance.times,
+      padding: overlayPadding
     });
+    attachPanZoom(canvas);
+    chartScene.instances.push(instance);
   });
 }
 
 function drawChart(canvas, values, times, config) {
   const ctx = canvas.getContext("2d");
-  const width = canvas.clientWidth;
-  const height = canvas.height;
+  const width = canvas.clientWidth || canvas.getBoundingClientRect().width;
+  const height = canvas.clientHeight || canvas.getBoundingClientRect().height || canvas.height;
   canvas.width = width * window.devicePixelRatio;
   canvas.height = height * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
@@ -787,9 +1039,13 @@ function drawChart(canvas, values, times, config) {
   ctx.fillStyle = themeVar("--canvas");
   ctx.fillRect(0, 0, width, height);
 
-  const cleanValues = values.filter((v) => v !== null && v !== undefined);
-  let min = cleanValues.length ? Math.min(...cleanValues) : 0;
-  let max = cleanValues.length ? Math.max(...cleanValues) : 1;
+  let min = config?.extent?.min ?? null;
+  let max = config?.extent?.max ?? null;
+  if (min === null || max === null) {
+    const cleanValues = values.filter((v) => v !== null && v !== undefined);
+    min = cleanValues.length ? Math.min(...cleanValues) : 0;
+    max = cleanValues.length ? Math.max(...cleanValues) : 1;
+  }
   if (config.unit === "%") {
     min = 0;
     max = 100;
@@ -896,30 +1152,81 @@ function drawChart(canvas, values, times, config) {
   });
 }
 
-function drawOverlayChart(canvas, series, times, title, unit) {
-  const ctx = canvas.getContext("2d");
-  const width = canvas.clientWidth;
-  const height = canvas.height;
-  canvas.width = width * window.devicePixelRatio;
-  canvas.height = height * window.devicePixelRatio;
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+function buildOverlayPaths(instance, layout) {
+  const { series, extent } = instance;
+  const { padding, chartWidth, chartHeight } = layout;
+  let min = extent?.min ?? 0;
+  let max = extent?.max ?? 1;
+
+  if (instance.unit === "%") {
+    min = 0;
+    max = 100;
+  }
+  if (instance.unit === "in" || instance.unit === "mph") {
+    min = 0;
+  }
+  if (instance.unit === "in") {
+    max = Math.max(max, 0.05);
+  }
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+
+  instance.yValues.clear();
+  const range = max - min || 1;
+  series.forEach((metric) => {
+    const yPositions = metric.values.map((value) => {
+      if (value === null || value === undefined) return null;
+      const yRatio = (value - min) / range;
+      return padding.top + chartHeight - yRatio * chartHeight;
+    });
+    instance.yValues.set(metric.key, yPositions);
+  });
+}
+
+function drawOverlayInstance(instance) {
+  const { canvas, ctx, times, extent } = instance;
+  const width = canvas.clientWidth || canvas.getBoundingClientRect().width;
+  const height = canvas.clientHeight || canvas.getBoundingClientRect().height || canvas.height;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = themeVar("--canvas");
   ctx.fillRect(0, 0, width, height);
 
-  const padding = { top: 14, right: 10, bottom: 28, left: 38 };
+  const padding = overlayChartPadding;
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
+  if (chartWidth <= 0 || chartHeight <= 0) return;
 
-  const segments = getDaySegments(times);
+  const layout = instance.layout;
+  const sizeChanged =
+    !layout ||
+    layout.width !== width ||
+    layout.height !== height ||
+    layout.chartWidth !== chartWidth ||
+    layout.chartHeight !== chartHeight;
+  if (sizeChanged) {
+    instance.layout = { width, height, chartWidth, chartHeight, padding };
+    buildOverlayPaths(instance, instance.layout);
+  }
+
+  const windowStart = state.startIndex;
+  const windowEnd = windowStart + state.windowSize;
+  const windowTimes = times.slice(windowStart, windowEnd);
+
+  const segments = getDaySegments(windowTimes);
   const baseFontSize = 48;
   const scale = Math.min(1, width < 800 ? width / 800 : 1);
   const fontSize = Math.max(20, Math.round(baseFontSize * scale));
   segments.forEach((segment) => {
     if (!segment.label) return;
-    const startX = padding.left + (chartWidth * segment.start) / (times.length - 1 || 1);
-    const endX = padding.left + (chartWidth * segment.end) / (times.length - 1 || 1);
+    const startX = padding.left + (chartWidth * segment.start) / (windowTimes.length - 1 || 1);
+    const endX = padding.left + (chartWidth * segment.end) / (windowTimes.length - 1 || 1);
     const centerX = (startX + endX) / 2;
     ctx.fillStyle = themeVar("--chart-watermark");
     ctx.font = `${fontSize}px Space Grotesk`;
@@ -928,7 +1235,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     const leftEdge = centerX - textWidth / 2;
     const rightEdge = centerX + textWidth / 2;
     const isFirst = segment.start === 0;
-    const isLast = segment.end === times.length - 1;
+    const isLast = segment.end === windowTimes.length - 1;
     if ((isFirst || isLast) && (leftEdge < padding.left || rightEdge > width - padding.right)) {
       ctx.textAlign = "start";
       return;
@@ -945,9 +1252,9 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   ctx.lineTo(width - padding.right, padding.top + chartHeight);
   ctx.stroke();
 
-  const midnightIndices = getMidnightIndices(times);
+  const midnightIndices = getMidnightIndices(windowTimes);
   midnightIndices.forEach((index) => {
-    const x = padding.left + (chartWidth * index) / (times.length - 1 || 1);
+    const x = padding.left + (chartWidth * index) / (windowTimes.length - 1 || 1);
     ctx.strokeStyle = themeVar("--chart-midnight");
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -966,19 +1273,54 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     ctx.stroke();
   }
 
-  const allValues = series.flatMap((metric) =>
-    metric.values.filter((value) => value !== null && value !== undefined)
-  );
-  let min = allValues.length ? Math.min(...allValues) : 0;
-  let max = allValues.length ? Math.max(...allValues) : 1;
-  if (unit === "%") {
+  const visibleSeries = instance.series.filter((metric) => isMetricVisible(metric.key));
+  if (!visibleSeries.length) {
+    drawEmptyOverlay(canvas, "Select metrics in the legend to show this chart.");
+    return;
+  }
+
+  const baseLineWidth = 2.2;
+
+  let drewLine = false;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  const span = Math.max(1, state.windowSize - 1);
+  visibleSeries.forEach((metric) => {
+    const yPositions = instance.yValues.get(metric.key);
+    if (!yPositions) return;
+    const path = new Path2D();
+    let started = false;
+    for (let i = windowStart; i < windowEnd; i += 1) {
+      const y = yPositions[i];
+      if (y === null || y === undefined) {
+        started = false;
+        continue;
+      }
+      const x = padding.left + (chartWidth * (i - windowStart)) / span;
+      if (!started) {
+        path.moveTo(x, y);
+        started = true;
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    if (!started) return;
+    drewLine = true;
+    ctx.strokeStyle = metric.color;
+    ctx.lineWidth = baseLineWidth;
+    ctx.stroke(path);
+  });
+
+  let min = extent?.min ?? 0;
+  let max = extent?.max ?? 1;
+  if (instance.unit === "%") {
     min = 0;
     max = 100;
   }
-  if (unit === "in" || unit === "mph") {
+  if (instance.unit === "in" || instance.unit === "mph") {
     min = 0;
   }
-  if (unit === "in") {
+  if (instance.unit === "in") {
     max = Math.max(max, 0.05);
   }
   if (min === max) {
@@ -986,35 +1328,7 @@ function drawOverlayChart(canvas, series, times, title, unit) {
     max += 1;
   }
 
-  let drewLine = false;
-  series.forEach((metric) => {
-    const cleanValues = metric.values.filter((v) => v !== null && v !== undefined);
-    if (!cleanValues.length) return;
-    const range = max - min || 1;
-
-    ctx.beginPath();
-    let started = false;
-    metric.values.forEach((value, index) => {
-      if (value === null || value === undefined) return;
-      const x = padding.left + (chartWidth * index) / (metric.values.length - 1 || 1);
-      const yRatio = (value - min) / range;
-      const y = padding.top + chartHeight - yRatio * chartHeight;
-      if (!started) {
-        ctx.moveTo(x, y);
-        started = true;
-      } else {
-        ctx.lineTo(x, y);
-      }
-    });
-    if (started) {
-      drewLine = true;
-      ctx.strokeStyle = metric.color;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-  });
-
-  const axisPrecision = unit === "in" ? 2 : 0;
+  const axisPrecision = instance.unit === "in" ? 2 : 0;
   const minLabel = formatAxisValue(min, axisPrecision);
   const maxLabel = formatAxisValue(max, axisPrecision);
   ctx.fillStyle = "#56566d";
@@ -1032,12 +1346,12 @@ function drawOverlayChart(canvas, series, times, title, unit) {
   }
   ctx.textAlign = "start";
 
-  let tickIndices = getTickIndicesByWidth(times, chartWidth, ctx);
-  tickIndices = pruneTrailingOverlap(tickIndices, times, chartWidth, ctx, padding);
+  let tickIndices = getTickIndicesByWidth(windowTimes, chartWidth, ctx);
+  tickIndices = pruneTrailingOverlap(tickIndices, windowTimes, chartWidth, ctx, padding);
   tickIndices.forEach((index, position) => {
-    const time = times[index];
+    const time = windowTimes[index];
     if (!time) return;
-    const x = padding.left + (chartWidth * index) / (times.length - 1 || 1);
+    const x = padding.left + (chartWidth * index) / (windowTimes.length - 1 || 1);
     const labelTime = time.toLocaleTimeString(undefined, { hour: "numeric" });
     if (position === tickIndices.length - 1) {
       ctx.textAlign = "right";
@@ -1062,8 +1376,8 @@ function drawOverlayChart(canvas, series, times, title, unit) {
 
 function drawEmptyOverlay(canvas, message) {
   const ctx = canvas.getContext("2d");
-  const width = canvas.clientWidth;
-  const height = canvas.height;
+  const width = canvas.clientWidth || canvas.getBoundingClientRect().width;
+  const height = canvas.clientHeight || canvas.getBoundingClientRect().height || canvas.height;
   canvas.width = width * window.devicePixelRatio;
   canvas.height = height * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
@@ -1129,7 +1443,7 @@ function updateSliders() {
   windowSizeEl.max = String(maxSnap);
   windowSizeEl.min = String(minWindow);
   windowSizeEl.step = maxWindow >= 12 ? "12" : "1";
-  state.windowSize = snapWindowSize(state.windowSize, maxSnap, minWindow);
+  state.windowSize = Math.max(minWindow, Math.min(state.windowSize, maxWindow));
   windowSizeEl.value = String(state.windowSize);
   windowLabelEl.textContent = `${state.windowSize}h`;
   const maxStart = Math.max(0, loc.hourly.length - state.windowSize);
