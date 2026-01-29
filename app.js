@@ -10,16 +10,19 @@ const state = {
   data: [],
   windowSize: 96,
   startIndex: 0,
-  metricVisibility: {}
+  metricVisibility: {},
+  lastChecked: null
 };
 
 const locationListEl = document.getElementById("locationList");
 const locationNameEl = document.getElementById("locationName");
 const locationMetaEl = document.getElementById("locationMeta");
 const refreshBtn = document.getElementById("refresh");
-const windowSizeEl = document.getElementById("windowSize");
-const windowLabelEl = document.getElementById("windowLabel");
-const startIndexEl = document.getElementById("startIndex");
+const timelineTrackEl = document.getElementById("timelineTrack");
+const timelineDaysEl = document.getElementById("timelineDays");
+const timelineSelectionEl = document.getElementById("timelineSelection");
+const markerStartEl = document.getElementById("markerStart");
+const markerEndEl = document.getElementById("markerEnd");
 const timeRangeEl = document.getElementById("timeRange");
 const chartsEl = document.getElementById("charts");
 const overlayNoteEl = document.getElementById("overlayNote");
@@ -306,7 +309,10 @@ function attachTooltip(canvas, payload) {
       state.windowSize
     );
     const time = payload.times[index];
-    if (!time) return;
+    if (!time) {
+      hideTooltip();
+      return;
+    }
     const timeLabel = time.toLocaleString(undefined, { weekday: "short", hour: "numeric" });
 
     if (payload.type === "single") {
@@ -336,12 +342,68 @@ function attachTooltip(canvas, payload) {
       .filter(Boolean)
       .join("");
 
-    if (!rows) return;
+    if (!rows) {
+      hideTooltip();
+      return;
+    }
     showTooltip(`<div class="tooltip-time">${timeLabel}</div>${rows}`, event.clientX, event.clientY);
   });
 
   canvas.addEventListener("mouseleave", hideTooltip);
   canvas.addEventListener("blur", hideTooltip);
+
+  canvas.addEventListener("touchstart", (event) => {
+    if (interactionState.isInteracting) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    const index = getIndexFromEventWindow(
+      touch,
+      canvas,
+      payload.times.length,
+      payload.padding,
+      state.startIndex,
+      state.windowSize
+    );
+    const time = payload.times[index];
+    if (!time) {
+      hideTooltip();
+      return;
+    }
+    if (payload.type === "single") {
+      const value = payload.values[index];
+      const display = formatTooltipValueWithUnit(value, payload.unit, payload.key);
+      showTooltip(
+        `<div class="tooltip-time">${time.toLocaleString(undefined, { weekday: "short", hour: "numeric" })}</div><div>${payload.label}: ${display}</div>`,
+        touch.clientX,
+        touch.clientY
+      );
+      return;
+    }
+    const rows = payload.series
+      .filter((metric) => isMetricVisible(metric.key))
+      .map((metric) => {
+        const value = metric.values[index];
+        if (value === null || value === undefined) return null;
+        const display = formatTooltipValueWithUnit(value, metric.unit, metric.key);
+        return `
+          <div class="tooltip-row">
+            <span class="tooltip-swatch" style="background:${metric.color}"></span>
+            <span>${metric.label}: ${display}${metric.unit ? ` ${metric.unit}` : ""}</span>
+          </div>
+        `;
+      })
+      .filter(Boolean)
+      .join("");
+    if (!rows) {
+      hideTooltip();
+      return;
+    }
+    showTooltip(
+      `<div class="tooltip-time">${time.toLocaleString(undefined, { weekday: "short", hour: "numeric" })}</div>${rows}`,
+      touch.clientX,
+      touch.clientY
+    );
+  }, { passive: true });
 }
 
 function getAnchorRatioFromClientX(canvas, clientX) {
@@ -356,10 +418,15 @@ function zoomWindow(targetWindow, anchorRatio) {
   const loc = state.data[state.selectedIndex];
   if (!loc) return;
   const maxWindow = Math.max(1, loc.hourly.length);
-  const minWindow = Math.min(12, maxWindow);
+  const minWindow = 1;
   const nextWindow = clampWindowSize(targetWindow, maxWindow, minWindow);
-  const anchorIndex = state.startIndex + anchorRatio * state.windowSize;
-  const nextStart = clampStartIndex(anchorIndex - anchorRatio * nextWindow, nextWindow);
+  let nextStart = state.startIndex;
+  if (nextWindow >= maxWindow) {
+    nextStart = 0;
+  } else {
+    const anchorIndex = state.startIndex + anchorRatio * state.windowSize;
+    nextStart = clampStartIndex(anchorIndex - anchorRatio * nextWindow, nextWindow);
+  }
   if (nextWindow === state.windowSize && nextStart === state.startIndex) return;
   state.windowSize = nextWindow;
   state.startIndex = nextStart;
@@ -500,11 +567,12 @@ function formatTimeRange(start, end) {
 }
 
 function parseDuration(duration) {
-  const match = duration.match(/P(?:T(?:(\d+)H)?(?:(\d+)M)?)?/);
+  const match = duration.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/);
   if (!match) return 0;
-  const hours = parseInt(match[1] || "0", 10);
-  const minutes = parseInt(match[2] || "0", 10);
-  return hours * 60 + minutes;
+  const days = parseInt(match[1] || "0", 10);
+  const hours = parseInt(match[2] || "0", 10);
+  const minutes = parseInt(match[3] || "0", 10);
+  return (days * 24 + hours) * 60 + minutes;
 }
 
 function parseIntervalValues(values) {
@@ -535,10 +603,17 @@ function normalizeWindSpeed(speedText) {
 }
 
 function formatUpdated(value) {
-  if (!value) return "Updated time unavailable";
+  if (!value) return "Latest time unavailable";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Updated time unavailable";
-  return `Updated ${date.toLocaleString(undefined, { timeZoneName: "short" })}`;
+  if (Number.isNaN(date.getTime())) return "Latest time unavailable";
+  return `Latest ${date.toLocaleString(undefined, { timeZoneName: "short" })}`;
+}
+
+function formatChecked(value) {
+  if (!value) return "Checked time unavailable";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "Checked time unavailable";
+  return `Checked ${date.toLocaleString(undefined, { timeZoneName: "short" })}`;
 }
 
 function humanizeKey(key) {
@@ -623,6 +698,10 @@ function buildDailyForecast(periods) {
     const high = day ? day.temperature : null;
     const low = night ? night.temperature : null;
     const unit = (day && day.temperatureUnit) || (night && night.temperatureUnit) || "";
+    const dayProb = day?.probabilityOfPrecipitation?.value;
+    const nightProb = night?.probabilityOfPrecipitation?.value;
+    const probValues = [dayProb, nightProb].filter((value) => value !== null && value !== undefined);
+    const precipProb = probValues.length ? Math.max(...probValues) : null;
     let blurb = "";
     if (day && day.shortForecast && night && night.shortForecast) {
       const combined = `${day.shortForecast} then ${night.shortForecast}`;
@@ -635,7 +714,7 @@ function buildDailyForecast(periods) {
     } else {
       blurb = (day && day.shortForecast) || (night && night.shortForecast) || "";
     }
-    return { name, high, low, unit, blurb };
+    return { name, high, low, unit, blurb, precipProb };
   });
 }
 
@@ -643,6 +722,12 @@ function formatTemp(temp, unit) {
   if (temp === null || temp === undefined) return "--";
   const label = unit === "F" ? "°F" : unit;
   return `${temp}${label ? ` ${label}` : ""}`;
+}
+
+function formatPrecipProb(value) {
+  if (value === null || value === undefined) return "--";
+  const rounded = Math.round(value);
+  return `${rounded}%`;
 }
 
 function shouldExcludeMetric(key) {
@@ -658,7 +743,9 @@ function shouldExcludeMetric(key) {
     normalized === "visibility" ||
     normalized === "lowvisibilityoccurrenceriskindex" ||
     normalized === "atmosphericdispersionindex" ||
-    normalized === "windchill"
+    normalized === "windchill" ||
+    normalized === "wetbulbglobetemperature" ||
+    normalized === "waveheight"
   );
 }
 
@@ -672,6 +759,13 @@ function clampStartIndex(value, windowSize = state.windowSize) {
 function clampWindowSize(value, maxWindow, minWindow) {
   if (!Number.isFinite(value)) return minWindow;
   return Math.max(minWindow, Math.min(Math.round(value), maxWindow));
+}
+
+function normalizeWindow(loc) {
+  if (!loc) return;
+  const maxWindow = Math.max(1, loc.hourly.length);
+  state.windowSize = Math.max(1, Math.min(state.windowSize, maxWindow));
+  state.startIndex = clampStartIndex(state.startIndex, state.windowSize);
 }
 
 function scheduleInteractionRender() {
@@ -714,12 +808,7 @@ async function loadLocation(location) {
   const forecastHourly = await fetchJson(point.properties.forecastHourly);
   const forecast = await fetchJson(point.properties.forecast);
   const grid = await fetchJson(point.properties.forecastGridData);
-  const updated =
-    forecastHourly.properties.updated ||
-    forecastHourly.properties.updateTime ||
-    forecastHourly.properties.generatedAt ||
-    grid.properties.updateTime ||
-    null;
+  const updated = forecastHourly.properties.updateTime || null;
 
   const metricMeta = Object.entries(grid.properties)
     .filter(([key, prop]) => prop && Array.isArray(prop.values) && !shouldExcludeMetric(key))
@@ -828,27 +917,12 @@ function renderLocations() {
 function selectLocation(index) {
   state.selectedIndex = index;
   state.startIndex = 0;
-  startIndexEl.value = "0";
   localStorage.setItem("selectedLocation", state.data[index]?.name || "");
   renderLocations();
   ensureMetricVisibility(state.data[index]);
   updateSliders();
   renderView();
 }
-
-function setWindowSize(value) {
-  state.windowSize = snapWindowSize(value);
-  windowLabelEl.textContent = `${state.windowSize}h`;
-  updateSliders();
-  renderView();
-}
-
-function setStartIndex(value) {
-  state.startIndex = clampStartIndex(value);
-  startIndexEl.value = String(state.startIndex);
-  renderView();
-}
-
 
 function buildSeries(location, windowData) {
   return location.metrics.map((meta) => ({
@@ -862,15 +936,27 @@ function renderView(options = {}) {
   if (!loc) return;
   const { rebuild = true } = options;
 
-  state.startIndex = clampStartIndex(state.startIndex);
-  startIndexEl.value = String(state.startIndex);
+  normalizeWindow(loc);
 
   const sliceStart = state.startIndex;
   const sliceEnd = sliceStart + state.windowSize;
   const windowData = loc.hourly.slice(sliceStart, sliceEnd);
 
+  if (rebuild) {
+    buildTimelineDays(loc.hourly.map((entry) => entry.time));
+  }
+  updateTimelineMarkers();
+  if (rebuild) {
+    requestAnimationFrame(adjustTimelineDayLabels);
+  }
+
   locationNameEl.textContent = loc.name;
-  locationMetaEl.textContent = formatUpdated(loc.updated);
+  const checkedLine = formatChecked(state.lastChecked);
+  const latestLine = formatUpdated(loc.updated);
+  locationMetaEl.innerHTML = `
+    <span class="meta-line">${checkedLine}</span>
+    <span class="meta-line">${latestLine}</span>
+  `;
 
   if (windowData.length) {
     timeRangeEl.textContent = formatTimeRange(windowData[0].time, windowData[windowData.length - 1].time);
@@ -1013,6 +1099,7 @@ function buildOverlayScene(series, location) {
       times: location.hourly.map((entry) => entry.time),
       extent: fixedExtent,
       yValues: new Map(),
+      lastNonNull: new Map(),
       layout: null
     };
 
@@ -1174,6 +1261,7 @@ function buildOverlayPaths(instance, layout) {
   }
 
   instance.yValues.clear();
+  instance.lastNonNull.clear();
   const range = max - min || 1;
   series.forEach((metric) => {
     const yPositions = metric.values.map((value) => {
@@ -1182,6 +1270,14 @@ function buildOverlayPaths(instance, layout) {
       return padding.top + chartHeight - yRatio * chartHeight;
     });
     instance.yValues.set(metric.key, yPositions);
+    let lastIndex = -1;
+    for (let i = yPositions.length - 1; i >= 0; i -= 1) {
+      if (yPositions[i] !== null && yPositions[i] !== undefined) {
+        lastIndex = i;
+        break;
+      }
+    }
+    instance.lastNonNull.set(metric.key, lastIndex);
   });
 }
 
@@ -1217,16 +1313,20 @@ function drawOverlayInstance(instance) {
 
   const windowStart = state.startIndex;
   const windowEnd = windowStart + state.windowSize;
-  const windowTimes = times.slice(windowStart, windowEnd);
+  const clampStart = Math.max(0, windowStart);
+  const clampEnd = Math.max(clampStart, Math.min(windowEnd, times.length));
+  const windowTimes = times.slice(clampStart, clampEnd);
+  const windowOffset = clampStart - windowStart;
 
   const segments = getDaySegments(windowTimes);
   const baseFontSize = 48;
-  const scale = Math.min(1, width < 800 ? width / 800 : 1);
-  const fontSize = Math.max(20, Math.round(baseFontSize * scale));
+  const scale = Math.min(1, width < 900 ? width / 900 : 1);
+  const fontSize = Math.max(18, Math.round(baseFontSize * scale));
   segments.forEach((segment) => {
     if (!segment.label) return;
-    const startX = padding.left + (chartWidth * segment.start) / (windowTimes.length - 1 || 1);
-    const endX = padding.left + (chartWidth * segment.end) / (windowTimes.length - 1 || 1);
+    const span = Math.max(1, state.windowSize - 1);
+    const startX = padding.left + (chartWidth * (segment.start + windowOffset)) / span;
+    const endX = padding.left + (chartWidth * (segment.end + windowOffset)) / span;
     const centerX = (startX + endX) / 2;
     ctx.fillStyle = themeVar("--chart-watermark");
     ctx.font = `${fontSize}px Space Grotesk`;
@@ -1254,7 +1354,8 @@ function drawOverlayInstance(instance) {
 
   const midnightIndices = getMidnightIndices(windowTimes);
   midnightIndices.forEach((index) => {
-    const x = padding.left + (chartWidth * index) / (windowTimes.length - 1 || 1);
+    const span = Math.max(1, state.windowSize - 1);
+    const x = padding.left + (chartWidth * (index + windowOffset)) / span;
     ctx.strokeStyle = themeVar("--chart-midnight");
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -1288,27 +1389,56 @@ function drawOverlayInstance(instance) {
   visibleSeries.forEach((metric) => {
     const yPositions = instance.yValues.get(metric.key);
     if (!yPositions) return;
+    const lastNon = instance.lastNonNull.get(metric.key) ?? -1;
+    if (lastNon < 0) return;
+    const dataSpan = Math.max(0, lastNon);
+    let offset = 0;
+    if (windowStart < 0 && windowEnd > dataSpan) {
+      offset = windowStart + (span - dataSpan) / 2;
+    } else if (windowStart < 0) {
+      offset = windowStart;
+    } else if (windowStart > dataSpan) {
+      offset = windowStart - dataSpan;
+    }
+    const seriesClampStart = 0;
+    const seriesClampEnd = Math.min(yPositions.length, lastNon + 1);
+    const overscrollOffsetX = (-chartWidth * offset) / span;
     const path = new Path2D();
     let started = false;
-    for (let i = windowStart; i < windowEnd; i += 1) {
+    let points = 0;
+    let lastPoint = null;
+    for (let i = seriesClampStart; i < seriesClampEnd; i += 1) {
       const y = yPositions[i];
       if (y === null || y === undefined) {
         started = false;
         continue;
       }
-      const x = padding.left + (chartWidth * (i - windowStart)) / span;
+      const x = padding.left + overscrollOffsetX + (chartWidth * (i - windowStart)) / span;
       if (!started) {
         path.moveTo(x, y);
         started = true;
       } else {
         path.lineTo(x, y);
       }
+      points += 1;
+      lastPoint = { x, y };
     }
     if (!started) return;
     drewLine = true;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(padding.left, padding.top, chartWidth, chartHeight);
+    ctx.clip();
     ctx.strokeStyle = metric.color;
     ctx.lineWidth = baseLineWidth;
     ctx.stroke(path);
+    ctx.restore();
+    if (points === 1 && lastPoint) {
+      ctx.fillStyle = metric.color;
+      ctx.beginPath();
+      ctx.arc(lastPoint.x, lastPoint.y, 2.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
   });
 
   let min = extent?.min ?? 0;
@@ -1351,7 +1481,8 @@ function drawOverlayInstance(instance) {
   tickIndices.forEach((index, position) => {
     const time = windowTimes[index];
     if (!time) return;
-    const x = padding.left + (chartWidth * index) / (windowTimes.length - 1 || 1);
+    const span = Math.max(1, state.windowSize - 1);
+    const x = padding.left + (chartWidth * (index + windowOffset)) / span;
     const labelTime = time.toLocaleTimeString(undefined, { hour: "numeric" });
     if (position === tickIndices.length - 1) {
       ctx.textAlign = "right";
@@ -1362,16 +1493,14 @@ function drawOverlayInstance(instance) {
     }
   });
 
-  if (!drewLine) {
-    return;
+  if (drewLine) {
+    ctx.strokeStyle = themeVar("--chart-axis-strong");
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, padding.top);
+    ctx.lineTo(padding.left, padding.top + chartHeight);
+    ctx.stroke();
   }
-
-  ctx.strokeStyle = themeVar("--chart-axis-strong");
-  ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.moveTo(padding.left, padding.top);
-  ctx.lineTo(padding.left, padding.top + chartHeight);
-  ctx.stroke();
 }
 
 function drawEmptyOverlay(canvas, message) {
@@ -1402,7 +1531,8 @@ function renderForecast(location) {
     card.className = "forecast-card";
     const high = formatTemp(day.high, day.unit);
     const low = formatTemp(day.low, day.unit);
-    const rangeText = `High ${high} / Low ${low}`;
+    const probText = formatPrecipProb(day.precipProb);
+    const rangeText = `↑ ${high} / ↓ ${low} / ${probText} ☂`;
     card.innerHTML = `
       <h4>${day.name}</h4>
       <p>${rangeText}</p>
@@ -1415,6 +1545,7 @@ function renderForecast(location) {
 async function loadAll() {
   try {
     refreshBtn.classList.add("is-loading");
+    state.lastChecked = new Date();
     state.data = await Promise.all(locations.map(loadLocation));
     const savedLocation = localStorage.getItem("selectedLocation");
     if (savedLocation) {
@@ -1438,25 +1569,215 @@ function updateSliders() {
   const loc = state.data[state.selectedIndex];
   if (!loc) return;
   const maxWindow = Math.max(1, loc.hourly.length);
-  const minWindow = Math.min(12, maxWindow);
-  const maxSnap = maxWindow >= 12 ? Math.floor(maxWindow / 12) * 12 : maxWindow;
-  windowSizeEl.max = String(maxSnap);
-  windowSizeEl.min = String(minWindow);
-  windowSizeEl.step = maxWindow >= 12 ? "12" : "1";
+  const minWindow = 1;
   state.windowSize = Math.max(minWindow, Math.min(state.windowSize, maxWindow));
-  windowSizeEl.value = String(state.windowSize);
-  windowLabelEl.textContent = `${state.windowSize}h`;
-  const maxStart = Math.max(0, loc.hourly.length - state.windowSize);
-  startIndexEl.max = String(maxStart);
-  state.startIndex = clampStartIndex(state.startIndex);
-  startIndexEl.value = String(state.startIndex);
+  state.startIndex = clampStartIndex(state.startIndex, state.windowSize);
+  updateTimelineMarkers();
 }
 
-function snapWindowSize(value, maxSnap, minWindow = 12) {
-  const limit = maxSnap ?? value;
-  if (limit < 12) return Math.max(1, Math.min(value, limit));
-  const snapped = Math.round(value / 12) * 12;
-  return Math.max(minWindow, Math.min(snapped, limit));
+function buildTimelineDays(times) {
+  if (!timelineDaysEl) return;
+  timelineDaysEl.innerHTML = "";
+  if (!times || !times.length) return;
+
+  const segments = [];
+  let currentKey = "";
+  let current = null;
+  times.forEach((time) => {
+    if (!time) return;
+    const key = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()}`;
+    if (key !== currentKey) {
+      currentKey = key;
+      current = {
+        key,
+        date: new Date(time),
+        hours: 0
+      };
+      segments.push(current);
+    }
+    current.hours += 1;
+  });
+
+  const totalHours = segments.reduce((sum, segment) => sum + segment.hours, 0) || 1;
+  segments.forEach((segment, index) => {
+    const dayEl = document.createElement("div");
+    dayEl.className = "timeline-day";
+    const label = segment.date.toLocaleDateString(undefined, { weekday: "short" });
+    const labelEl = document.createElement("span");
+    labelEl.className = "timeline-day-label";
+    labelEl.textContent = label;
+    dayEl.appendChild(labelEl);
+    dayEl.style.width = `${(segment.hours / totalHours) * 100}%`;
+    dayEl.title = `${label} (${segment.hours}h)`;
+    if (index === segments.length - 1) {
+      dayEl.style.borderRight = "none";
+    }
+    timelineDaysEl.appendChild(dayEl);
+  });
+
+  requestAnimationFrame(adjustTimelineDayLabels);
+}
+
+function adjustTimelineDayLabels() {
+  if (!timelineTrackEl || !timelineDaysEl) return;
+  const dayEls = Array.from(timelineDaysEl.querySelectorAll(".timeline-day"));
+  if (!dayEls.length) return;
+  dayEls.forEach((day) => {
+    const label = day.querySelector(".timeline-day-label");
+    if (label) label.style.opacity = "1";
+  });
+
+  const trackRect = timelineTrackEl.getBoundingClientRect();
+  const first = dayEls[0];
+  const last = dayEls[dayEls.length - 1];
+  const check = (dayEl) => {
+    const label = dayEl.querySelector(".timeline-day-label");
+    if (!label) return;
+    const labelRect = label.getBoundingClientRect();
+    if (labelRect.left < trackRect.left + 6 || labelRect.right > trackRect.right - 6) {
+      label.style.opacity = "0";
+    }
+  };
+  check(first);
+  if (last !== first) check(last);
+}
+
+function updateTimelineMarkers() {
+  const loc = state.data[state.selectedIndex];
+  if (!loc || !timelineTrackEl) return;
+  const count = loc.hourly.length;
+  if (count <= 1) return;
+  const rect = timelineTrackEl.getBoundingClientRect();
+  const width = rect.width;
+  if (!width) return;
+  const maxIndex = count - 1;
+  const safeMax = maxIndex || 1;
+  const windowSpan = Math.max(1, state.windowSize - 1);
+  const selectionWidth = (windowSpan / safeMax) * width;
+  let startX = (state.startIndex / safeMax) * width;
+  let endX = startX + selectionWidth;
+  if (selectionWidth >= width) {
+    startX = 0;
+    endX = width;
+  } else {
+    if (startX < 0) {
+      startX = 0;
+      endX = selectionWidth;
+    }
+    if (endX > width) {
+      endX = width;
+      startX = width - selectionWidth;
+    }
+  }
+
+  const markerWidth = markerStartEl?.offsetWidth || markerEndEl?.offsetWidth || 10;
+  const inset = 6;
+  const endInset = inset + 2;
+  const startLeft = Math.min(Math.max(startX + inset, inset), width - markerWidth - inset);
+  const endLeft = Math.min(Math.max(endX - markerWidth - endInset, inset), width - markerWidth - endInset);
+  if (markerStartEl) {
+    markerStartEl.style.left = `${startLeft}px`;
+  }
+  if (markerEndEl) {
+    markerEndEl.style.left = `${endLeft}px`;
+  }
+  if (timelineSelectionEl) {
+    const left = Math.min(startLeft + markerWidth, endLeft);
+    const right = Math.max(startLeft + markerWidth, endLeft);
+    timelineSelectionEl.style.left = `${left}px`;
+    timelineSelectionEl.style.width = `${Math.max(4, right - left)}px`;
+  }
+}
+
+function attachTimelineDrag(marker, type) {
+  if (!marker || !timelineTrackEl) return;
+  const onPointerDown = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    marker.setPointerCapture(event.pointerId);
+    interactionState.isInteracting = true;
+    hideTooltip();
+
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      const loc = state.data[state.selectedIndex];
+      if (!loc) return;
+      const rect = timelineTrackEl.getBoundingClientRect();
+      const width = rect.width || 1;
+      const x = Math.min(Math.max(moveEvent.clientX - rect.left, 0), width);
+      const maxIndex = loc.hourly.length - 1;
+      const nextIndex = Math.round((x / width) * maxIndex);
+
+      const currentEnd = state.startIndex + state.windowSize - 1;
+      if (type === "start") {
+        const clampedStart = Math.max(0, Math.min(nextIndex, currentEnd - 1));
+        state.startIndex = clampedStart;
+        state.windowSize = currentEnd - state.startIndex + 1;
+      } else {
+        const clampedEnd = Math.min(maxIndex, Math.max(nextIndex, state.startIndex + 1));
+        state.windowSize = clampedEnd - state.startIndex + 1;
+      }
+      updateSliders();
+      scheduleInteractionRender();
+    };
+
+    const onUp = (upEvent) => {
+      marker.releasePointerCapture(upEvent.pointerId);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      interactionState.isInteracting = false;
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp, { once: true });
+  };
+
+  marker.addEventListener("pointerdown", onPointerDown);
+}
+
+function attachTimelineSelectionDrag() {
+  if (!timelineSelectionEl || !timelineTrackEl) return;
+  const onPointerDown = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    timelineSelectionEl.setPointerCapture(event.pointerId);
+    interactionState.isInteracting = true;
+    hideTooltip();
+
+    const loc = state.data[state.selectedIndex];
+    if (!loc) return;
+    const rect = timelineTrackEl.getBoundingClientRect();
+    const width = rect.width || 1;
+    const maxIndex = loc.hourly.length - 1;
+    const startIndex = state.startIndex;
+    const endIndex = state.startIndex + state.windowSize - 1;
+    const selectionSpan = endIndex - startIndex;
+    const startX = (startIndex / maxIndex) * width;
+    const offset = Math.min(Math.max(event.clientX - rect.left - startX, 0), width);
+
+    const onMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      const x = Math.min(Math.max(moveEvent.clientX - rect.left - offset, 0), width);
+      const nextStart = Math.round((x / width) * maxIndex);
+      const clampedStart = Math.max(0, Math.min(nextStart, maxIndex - selectionSpan));
+      state.startIndex = clampedStart;
+      state.windowSize = selectionSpan + 1;
+      updateSliders();
+      scheduleInteractionRender();
+    };
+
+    const onUp = (upEvent) => {
+      timelineSelectionEl.releasePointerCapture(upEvent.pointerId);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      interactionState.isInteracting = false;
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp, { once: true });
+  };
+
+  timelineSelectionEl.addEventListener("pointerdown", onPointerDown);
 }
 
 function unitSortRank(unit) {
@@ -1469,13 +1790,9 @@ function unitSortRank(unit) {
 }
 
 
-windowSizeEl.addEventListener("input", (event) => {
-  setWindowSize(parseInt(event.target.value, 10));
-});
-
-startIndexEl.addEventListener("input", (event) => {
-  setStartIndex(parseInt(event.target.value, 10));
-});
+attachTimelineDrag(markerStartEl, "start");
+attachTimelineDrag(markerEndEl, "end");
+attachTimelineSelectionDrag();
 
 refreshBtn.addEventListener("click", () => {
   loadAll();
@@ -1503,7 +1820,8 @@ locationsToggleEl.addEventListener("click", () => {
 
 
 window.addEventListener("resize", () => {
-  renderView();
+  renderView({ rebuild: true });
+  requestAnimationFrame(adjustTimelineDayLabels);
   const collapsed = localStorage.getItem("locationsCollapsed") === "true";
   applyLocationsState(collapsed);
 });

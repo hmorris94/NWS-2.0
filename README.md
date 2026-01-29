@@ -21,20 +21,20 @@ A lightweight NOAA/NWS forecast dashboard focused on a handful of locations with
 
 ## Quick Start
 
-Open `index.html` in a browser, or run:
+Open `index.html` directly in a browser, or start a local server:
 
 ```bash
-python serve.py
+python serve.py          # serves at http://localhost:5173
 ```
 
-## Development
-
-This project is intentionally dependency-light. If you want a local server with live reload:
+For live reload during development:
 
 ```bash
 npm install
-npm run dev
+npm run dev              # serves at http://localhost:5173
 ```
+
+No build step required—the project is intentionally dependency-light.
 
 ## Data Source
 

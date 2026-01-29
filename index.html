@@ -49,18 +49,11 @@
       </section>
 
       <div class="timeline">
-        <div class="timeline-controls">
-          <label class="control">
-            <span>Start Time</span>
-            <input id="startIndex" type="range" min="0" max="0" value="0" />
-          </label>
-          <label class="control">
-            <span class="control-header">
-              <span>Window</span>
-              <strong id="windowLabel" class="control-value">96h</strong>
-            </span>
-            <input id="windowSize" type="range" min="12" max="168" value="96" step="12" />
-          </label>
+        <div id="timelineTrack" class="timeline-track" aria-label="Forecast timeline">
+          <div id="timelineDays" class="timeline-days"></div>
+          <div id="timelineSelection" class="timeline-selection" aria-hidden="true"></div>
+          <button id="markerStart" class="timeline-marker start" type="button" aria-label="Start marker"></button>
+          <button id="markerEnd" class="timeline-marker end" type="button" aria-label="End marker"></button>
         </div>
         <div id="timeRange" class="time-range">&nbsp;</div>
       </div>
