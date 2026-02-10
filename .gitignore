@@ -1,4 +1,8 @@
 node_modules/
+__pycache__/
+wx_cache/
+.claude/
+server_side/data/*.json
 .DS_Store
 Thumbs.db
 weather.gov.ico

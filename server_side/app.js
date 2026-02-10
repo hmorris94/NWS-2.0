@@ -1,10 +1,4 @@
-const locations = [
-  { name: "Sterling, VA", lat: 39.0067, lon: -77.4286 },
-  { name: "Frederick, MD", lat: 39.4143, lon: -77.4105 },
-  { name: "Midlothian, VA", lat: 37.5057, lon: -77.6499 },
-  { name: "Broadway, VA", lat: 38.6132, lon: -78.7989 },
-  { name: "Hatteras, NC", lat: 35.2193, lon: -75.6907 }
-];
+// Server-side version - loads pre-fetched data from /data/locations.json
 
 const state = {
   selectedIndex: 0,
@@ -12,13 +6,13 @@ const state = {
   windowSize: 96,
   startIndex: 0,
   metricVisibility: {},
-  lastChecked: null
+  lastChecked: null,
+  serverFetchedAt: null
 };
 
 const locationListEl = document.getElementById("locationList");
 const locationNameEl = document.getElementById("locationName");
 const locationMetaEl = document.getElementById("locationMeta");
-const refreshBtn = document.getElementById("refresh");
 const timelineTrackEl = document.getElementById("timelineTrack");
 const timelineDaysEl = document.getElementById("timelineDays");
 const timelineSelectionEl = document.getElementById("timelineSelection");
@@ -614,171 +608,11 @@ function formatTimeRange(start, end) {
   return `${start.toLocaleString(undefined, opts)} to ${end.toLocaleString(undefined, opts)}`;
 }
 
-function parseDuration(duration) {
-  const match = duration.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/);
-  if (!match) return 0;
-  const days = parseInt(match[1] || "0", 10);
-  const hours = parseInt(match[2] || "0", 10);
-  const minutes = parseInt(match[3] || "0", 10);
-  return (days * 24 + hours) * 60 + minutes;
-}
-
-function parseIntervalValues(values) {
-  return values
-    .filter((entry) => entry.value !== null)
-    .map((entry) => {
-      const [startStr, durationStr] = entry.validTime.split("/");
-      const start = new Date(startStr).getTime();
-      const durationMinutes = parseDuration(durationStr);
-      const end = start + durationMinutes * 60 * 1000;
-      const value = sanitizeValue(entry.value);
-      return { start, end, value };
-    });
-}
-
-function getIntervalValue(intervals, timeMs) {
-  const found = intervals.find((entry) => timeMs >= entry.start && timeMs < entry.end);
-  return found ? found.value : null;
-}
-
 function formatTimestamp(value, prefix) {
   if (!value) return `${prefix} time unavailable`;
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return `${prefix} time unavailable`;
   return `${prefix} ${date.toLocaleString(undefined, { timeZoneName: "short" })}`;
-}
-
-function humanizeKey(key) {
-  if (labelOverrides[key]) return labelOverrides[key];
-  return key
-    .replace(/([A-Z])/g, " $1")
-    .replace(/^./, (match) => match.toUpperCase());
-}
-
-function normalizeUom(uom) {
-  const cleaned = (uom || "").replace("wmoUnit:", "").replace("unit:", "");
-  if (cleaned === "percent") {
-    return { unit: "%", convert: (value) => value };
-  }
-  if (cleaned === "degC") {
-    return { unit: "°F", convert: (value) => value * 1.8 + 32 };
-  }
-  if (cleaned === "degF") {
-    return { unit: "°F", convert: (value) => value };
-  }
-  if (cleaned === "m_s-1") {
-    return { unit: "mph", convert: (value) => value * 2.23694 };
-  }
-  if (cleaned === "km_h-1") {
-    return { unit: "mph", convert: (value) => value * 0.621371 };
-  }
-  if (cleaned === "m") {
-    return { unit: "mi", convert: (value) => value / 1609.34 };
-  }
-  if (cleaned === "mm") {
-    return { unit: "in", convert: (value) => value / 25.4 };
-  }
-  if (cleaned === "cm") {
-    return { unit: "in", convert: (value) => value / 2.54 };
-  }
-  if (cleaned === "kg_m-2") {
-    return { unit: "in", convert: (value) => value / 25.4 };
-  }
-  if (cleaned === "Pa") {
-    return { unit: "hPa", convert: (value) => value / 100 };
-  }
-  return { unit: cleaned || "", convert: (value) => value };
-}
-
-function sanitizeValue(value) {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  if (Math.abs(value) > 9000) return null;
-  return value;
-}
-
-function getMetricColor(key, index) {
-  const normalized = key.toLowerCase();
-  if (normalized.includes("quantitativeprecipitation")) return "#118ab2";
-  if (normalized.includes("snow")) return "#00bcd4";
-  if (normalized.includes("ice")) return "#8b5cf6";
-  if (normalized.includes("rain") || normalized.includes("liquid")) return "#00a676";
-  if (normalized.includes("drizzle")) return "#f59e0b";
-  if (normalized.includes("sleet") || normalized.includes("freezing")) return "#ef4444";
-  return colorPalette[index % colorPalette.length];
-}
-
-function buildDailyForecast(periods) {
-  const days = new Map();
-  periods.forEach((period) => {
-    const date = new Date(period.startTime);
-    if (Number.isNaN(date.getTime())) return;
-    const key = date.toISOString().slice(0, 10);
-    const entry = days.get(key) || { date, day: null, night: null };
-    if (period.isDaytime) entry.day = period;
-    else entry.night = period;
-    days.set(key, entry);
-  });
-
-  return Array.from(days.values()).map((entry) => {
-    const day = entry.day;
-    const night = entry.night;
-    const name =
-      (day && day.name) ||
-      (night && night.name) ||
-      entry.date.toLocaleDateString(undefined, { weekday: "long" });
-    const high = day ? day.temperature : null;
-    const low = night ? night.temperature : null;
-    const unit = (day && day.temperatureUnit) || (night && night.temperatureUnit) || "";
-    const dayProb = day?.probabilityOfPrecipitation?.value;
-    const nightProb = night?.probabilityOfPrecipitation?.value;
-    const probValues = [dayProb, nightProb].filter((value) => value !== null && value !== undefined);
-    const precipProb = probValues.length ? Math.max(...probValues) : null;
-    let blurb = "";
-    if (day && day.shortForecast && night && night.shortForecast) {
-      const combined = `${day.shortForecast} then ${night.shortForecast}`;
-      const tokens = combined
-        .split(/\s+then\s+/i)
-        .map((part) => part.trim())
-        .filter(Boolean);
-      const deduped = tokens.filter((part, index) => part !== tokens[index - 1]);
-      blurb = deduped.join(" then ");
-    } else {
-      blurb = (day && day.shortForecast) || (night && night.shortForecast) || "";
-    }
-    return { name, high, low, unit, blurb, precipProb };
-  });
-}
-
-function formatTemp(temp, unit) {
-  if (temp === null || temp === undefined) return "--";
-  const label = unit === "F" ? "°F" : unit;
-  return `${temp}${label ? ` ${label}` : ""}`;
-}
-
-function formatPrecipProb(value) {
-  if (value === null || value === undefined) return "--";
-  const rounded = Math.round(value);
-  return `${rounded}%`;
-}
-
-function shouldExcludeMetric(key) {
-  const normalized = key.toLowerCase();
-  return (
-    normalized === "mintemperature" ||
-    normalized === "maxtemperature" ||
-    normalized === "winddirection" ||
-    normalized === "transportwinddirection" ||
-    normalized === "transportwindspeed" ||
-    normalized === "ceilingheight" ||
-    normalized === "mixingheight" ||
-    normalized === "visibility" ||
-    normalized === "lowvisibilityoccurrenceriskindex" ||
-    normalized === "atmosphericdispersionindex" ||
-    normalized === "windchill" ||
-    normalized === "wetbulbglobetemperature" ||
-    normalized === "waveheight"
-  );
 }
 
 function clampStartIndex(value, windowSize = state.windowSize) {
@@ -827,109 +661,16 @@ function toggleMetric(key) {
   renderView();
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url, {
-    headers: { "User-Agent": "focused-forecast-demo" }
-  });
-  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-  return res.json();
+function formatTemp(temp, unit) {
+  if (temp === null || temp === undefined) return "--";
+  const label = unit === "F" ? "°F" : unit;
+  return `${temp}${label ? ` ${label}` : ""}`;
 }
 
-async function loadLocation(location) {
-  const point = await fetchJson(`https://api.weather.gov/points/${location.lat},${location.lon}`);
-  const forecastHourly = await fetchJson(point.properties.forecastHourly);
-  const forecast = await fetchJson(point.properties.forecast);
-  const grid = await fetchJson(point.properties.forecastGridData);
-  const updated = forecastHourly.properties.updateTime || null;
-
-  const metricMeta = Object.entries(grid.properties)
-    .filter(([key, prop]) => prop && Array.isArray(prop.values) && !shouldExcludeMetric(key))
-    .map(([key, prop]) => {
-      const { unit, convert } = normalizeUom(prop.uom);
-      const normalizedUnit = !unit && key.toLowerCase().includes("probability") ? "%" : unit;
-      return {
-        key,
-        label: humanizeKey(key),
-        unit: normalizedUnit,
-        convert,
-        intervals: parseIntervalValues(prop.values)
-      };
-    });
-
-  const hourly = forecastHourly.properties.periods.map((period) => {
-    const time = new Date(period.startTime);
-    const timeMs = time.getTime();
-    const metrics = {};
-
-    metricMeta.forEach((meta) => {
-      const raw = getIntervalValue(meta.intervals, timeMs);
-      if (raw === null || raw === undefined) {
-        metrics[meta.key] = null;
-      } else {
-        const converted = meta.convert(raw);
-        metrics[meta.key] = sanitizeValue(converted);
-      }
-    });
-
-    return {
-      time,
-      shortForecast: period.shortForecast,
-      windDirection: period.windDirection,
-      windSpeedText: period.windSpeed,
-      metrics
-    };
-  });
-
-  const now = new Date();
-  const currentHour = new Date(now);
-  currentHour.setMinutes(0, 0, 0);
-  const trimmedHourly =
-    hourly.length && currentHour > hourly[0].time
-      ? hourly.filter((entry) => entry.time >= currentHour)
-      : hourly;
-
-  const filteredMeta = metricMeta.filter((meta) =>
-    hourly.some((entry) => entry.metrics[meta.key] !== null && entry.metrics[meta.key] !== undefined)
-  );
-
-  const metrics = filteredMeta
-    .sort((a, b) => a.label.localeCompare(b.label))
-    .map((meta, index) => ({
-      key: meta.key,
-      label: meta.label,
-      unit: meta.unit,
-      color: getMetricColor(meta.key, index)
-    }));
-
-  const metricExtents = {};
-  const groupExtents = {};
-  metrics.forEach((metric) => {
-    const values = trimmedHourly
-      .map((entry) => entry.metrics[metric.key])
-      .filter((value) => value !== null && value !== undefined);
-    if (!values.length) return;
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    metricExtents[metric.key] = { min, max };
-    const group = getGroupForMetric(metric);
-    const groupKey = `${group.id}|${metric.unit || "unitless"}`;
-    if (!groupExtents[groupKey]) {
-      groupExtents[groupKey] = { min, max };
-    } else {
-      groupExtents[groupKey].min = Math.min(groupExtents[groupKey].min, min);
-      groupExtents[groupKey].max = Math.max(groupExtents[groupKey].max, max);
-    }
-  });
-
-  return {
-    ...location,
-    updated,
-    hourly: trimmedHourly,
-    metrics,
-    metricExtents,
-    groupExtents,
-    dailyForecast: buildDailyForecast(forecast.properties.periods)
-  };
+function formatPrecipProb(value) {
+  if (value === null || value === undefined) return "--";
+  const rounded = Math.round(value);
+  return `${rounded}%`;
 }
 
 function renderLocations() {
@@ -1136,62 +877,6 @@ function buildOverlayScene(series, location) {
     attachPanZoom(canvas);
     chartScene.instances.push(instance);
   });
-}
-
-function drawChart(canvas, values, times, config) {
-  const { ctx, width, height } = setupCanvas(canvas);
-
-  let min = config?.extent?.min ?? null;
-  let max = config?.extent?.max ?? null;
-  if (min === null || max === null) {
-    const cleanValues = values.filter((v) => v !== null && v !== undefined);
-    min = cleanValues.length ? Math.min(...cleanValues) : 0;
-    max = cleanValues.length ? Math.max(...cleanValues) : 1;
-  }
-  ({ min, max } = normalizeExtent(min, max, config.unit));
-
-  const padding = { top: 14, right: 10, bottom: 28, left: 30 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-
-  drawMidnightLines(ctx, getMidnightIndices(times), values.length, padding, chartWidth, chartHeight);
-  drawGridLines(ctx, width, padding, chartHeight);
-
-  if (!values.length) return;
-
-  ctx.beginPath();
-  values.forEach((value, index) => {
-    if (value === null || value === undefined) return;
-    const x = padding.left + (chartWidth * index) / (values.length - 1 || 1);
-    const yRatio = (value - min) / (max - min || 1);
-    const y = padding.top + chartHeight - yRatio * chartHeight;
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.strokeStyle = config.color;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.fillStyle = config.color;
-  values.forEach((value, index) => {
-    if (value === null || value === undefined) return;
-    const x = padding.left + (chartWidth * index) / (values.length - 1 || 1);
-    const yRatio = (value - min) / (max - min || 1);
-    const y = padding.top + chartHeight - yRatio * chartHeight;
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  const isPrecipAxis =
-    config.unit === "in" ||
-    config.key.toLowerCase().includes("precip") ||
-    config.key.toLowerCase().includes("snow") ||
-    config.key.toLowerCase().includes("ice");
-  const precision = isPrecipAxis ? 2 : 0;
-
-  drawYAxisLabels(ctx, min, max, precision, padding, chartHeight);
-  drawXAxisLabels(ctx, times, values.length, padding, chartWidth, width, height);
 }
 
 function buildOverlayPaths(instance, layout) {
@@ -1404,11 +1089,33 @@ function renderForecast(location) {
   });
 }
 
+// Convert server JSON data format to client format
+function processServerData(serverData) {
+  return serverData.locations.map(loc => {
+    // Convert hourly time strings back to Date objects
+    const hourly = loc.hourly.map(entry => ({
+      ...entry,
+      time: new Date(entry.time)
+    }));
+
+    return {
+      ...loc,
+      hourly
+    };
+  });
+}
+
 async function loadAll() {
   try {
-    refreshBtn.classList.add("is-loading");
     state.lastChecked = new Date();
-    state.data = await Promise.all(locations.map(loadLocation));
+    const response = await fetch("data/locations.json");
+    if (!response.ok) {
+      throw new Error(`Failed to load data: ${response.status}`);
+    }
+    const serverData = await response.json();
+    state.serverFetchedAt = serverData.fetchedAt;
+    state.data = processServerData(serverData);
+
     const savedLocation = localStorage.getItem("selectedLocation");
     if (savedLocation) {
       const matchIndex = state.data.findIndex((loc) => loc.name === savedLocation);
@@ -1421,9 +1128,9 @@ async function loadAll() {
     updateSliders();
     renderView();
   } catch (err) {
-    console.error(err);
-  } finally {
-    refreshBtn.classList.remove("is-loading");
+    console.error("Error loading data:", err);
+    locationNameEl.textContent = "Error loading data";
+    locationMetaEl.innerHTML = `<span class="meta-line">Please wait for server to fetch data...</span>`;
   }
 }
 
@@ -1656,10 +1363,6 @@ attachTimelineDrag(markerStartEl, "start");
 attachTimelineDrag(markerEndEl, "end");
 attachTimelineSelectionDrag();
 
-refreshBtn.addEventListener("click", () => {
-  loadAll();
-});
-
 themeToggleBtn.addEventListener("click", () => {
   const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
   const next = current === "dark" ? "light" : "dark";
@@ -1693,6 +1396,14 @@ initForecastState();
 initLocationsState();
 loadAll();
 
+// Re-render after fonts load to fix canvas text rendering
+document.fonts.ready.then(() => {
+  if (state.data.length) {
+    renderView({ rebuild: true });
+  }
+});
+
+// Poll for server updates every 5 minutes
 setInterval(() => {
   loadAll();
-}, 15 * 60 * 1000);
+}, 5 * 60 * 1000);

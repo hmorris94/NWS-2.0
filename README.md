@@ -24,14 +24,9 @@ A lightweight NOAA/NWS forecast dashboard focused on a handful of locations with
 Open `index.html` directly in a browser, or start a local server:
 
 ```bash
-python serve.py          # serves at http://localhost:5173
-```
-
-For live reload during development:
-
-```bash
-npm install
-npm run dev              # serves at http://localhost:5173
+python main.py               # client-only mode at http://localhost:5173
+python main.py --server      # server-side mode (background NWS fetching)
+python main.py --port 8080   # custom port
 ```
 
 No build step required—the project is intentionally dependency-light.

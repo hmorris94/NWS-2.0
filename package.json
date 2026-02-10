@@ -1,9 +1,0 @@
-{
-  "name": "focused-forecast-explorer",
-  "version": "0.1.0",
-  "private": true,
-  "description": "A focused NOAA/NWS forecast dashboard with dynamic time windows and grouped overlay graphs.",
-  "scripts": {
-    "dev": "npx --yes live-server --port=5173 --no-browser --watch=./"
-  }
-}
