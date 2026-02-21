@@ -15,6 +15,9 @@ const state = {
   lastChecked: null
 };
 
+const NWS_STORAGE_VERSION = 1;
+const NWS_STORAGE_VERSION_KEY = "nws_v";
+
 const locationListEl = document.getElementById("locationList");
 const locationNameEl = document.getElementById("locationName");
 const locationMetaEl = document.getElementById("locationMeta");
@@ -135,6 +138,15 @@ function hideTooltip() {
 
 function themeVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function initStorage() {
+  if (localStorage.getItem(NWS_STORAGE_VERSION_KEY) !== String(NWS_STORAGE_VERSION)) {
+    ["theme", "selectedLocation", "forecastCollapsed", "locationsCollapsed"].forEach(
+      k => localStorage.removeItem(k)
+    );
+    localStorage.setItem(NWS_STORAGE_VERSION_KEY, String(NWS_STORAGE_VERSION));
+  }
 }
 
 function applyTheme(theme) {
@@ -1688,6 +1700,7 @@ window.addEventListener("resize", () => {
   applyLocationsState(collapsed);
 });
 
+initStorage();
 initTheme();
 initForecastState();
 initLocationsState();
