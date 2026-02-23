@@ -25,7 +25,7 @@ COLOR_PALETTE = [
 # Label overrides for metric keys
 LABEL_OVERRIDES = {
     "probabilityOfPrecipitation": "Probability of Precipitation",
-    "quantitativePrecipitation": "Precip Amount",
+    "quantitativePrecipitation": "Precipitation Amount",
     "windSpeed": "Wind Speed",
     "windGust": "Wind Gust",
     "skyCover": "Sky Cover",
@@ -127,15 +127,27 @@ def parse_interval_values(values: List[Dict]) -> List[Dict]:
 
         value = sanitize_value(entry["value"])
         if value is not None:
-            result.append({"start": start_ms, "end": end_ms, "value": value})
+            result.append({"start": start_ms, "end": end_ms, "duration_hours": duration_minutes / 60, "value": value})
 
     return result
 
 
-def get_interval_value(intervals: List[Dict], time_ms: int) -> Optional[float]:
+def is_accumulation_metric(key: str) -> bool:
+    """True for metrics that are interval totals (precip, snow, ice) needing per-hour conversion."""
+    k = key.lower()
+    return (
+        ("precip" in k and "probability" not in k)
+        or "snow" in k
+        or ("ice" in k and "probability" not in k)
+    )
+
+
+def get_interval_value(intervals: List[Dict], time_ms: int, per_hour: bool = False) -> Optional[float]:
     """Get value at a specific timestamp from intervals."""
     for entry in intervals:
         if entry["start"] <= time_ms < entry["end"]:
+            if per_hour and entry["duration_hours"] > 1:
+                return entry["value"] / entry["duration_hours"]
             return entry["value"]
     return None
 
@@ -380,7 +392,7 @@ def fetch_location(
         metrics = {}
 
         for meta in metric_meta:
-            raw = get_interval_value(meta["intervals"], time_ms)
+            raw = get_interval_value(meta["intervals"], time_ms, is_accumulation_metric(meta["key"]))
             if raw is None:
                 metrics[meta["key"]] = None
             else:
@@ -396,6 +408,13 @@ def fetch_location(
                 "metrics": metrics,
             }
         )
+
+    # Subtract estimated liquid equivalent of snowfall from quantitative precipitation (10:1 SLR).
+    for entry in hourly:
+        qpf = entry["metrics"].get("quantitativePrecipitation")
+        snow = entry["metrics"].get("snowfallAmount")
+        if qpf is not None and snow is not None:
+            entry["metrics"]["quantitativePrecipitation"] = max(0.0, qpf - snow / 10.0)
 
     # Trim past hours
     now = datetime.now(timezone.utc)

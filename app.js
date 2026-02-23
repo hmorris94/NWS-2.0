@@ -53,7 +53,7 @@ const colorPalette = [
 
 const labelOverrides = {
   probabilityOfPrecipitation: "Probability of Precipitation",
-  quantitativePrecipitation: "Precip Amount",
+  quantitativePrecipitation: "Precipitation Amount",
   windSpeed: "Wind Speed",
   windGust: "Wind Gust",
   skyCover: "Sky Cover",
@@ -644,13 +644,21 @@ function parseIntervalValues(values) {
       const durationMinutes = parseDuration(durationStr);
       const end = start + durationMinutes * 60 * 1000;
       const value = sanitizeValue(entry.value);
-      return { start, end, value };
+      return { start, end, durationHours: durationMinutes / 60, value };
     });
 }
 
-function getIntervalValue(intervals, timeMs) {
+function isAccumulationMetric(key) {
+  const k = key.toLowerCase();
+  return (k.includes("precip") && !k.includes("probability")) ||
+    k.includes("snow") ||
+    (k.includes("ice") && !k.includes("probability"));
+}
+
+function getIntervalValue(intervals, timeMs, perHour = false) {
   const found = intervals.find((entry) => timeMs >= entry.start && timeMs < entry.end);
-  return found ? found.value : null;
+  if (!found) return null;
+  return perHour && found.durationHours > 1 ? found.value / found.durationHours : found.value;
 }
 
 function formatTimestamp(value, prefix) {
@@ -874,7 +882,7 @@ async function loadLocation(location) {
     const metrics = {};
 
     metricMeta.forEach((meta) => {
-      const raw = getIntervalValue(meta.intervals, timeMs);
+      const raw = getIntervalValue(meta.intervals, timeMs, isAccumulationMetric(meta.key));
       if (raw === null || raw === undefined) {
         metrics[meta.key] = null;
       } else {
@@ -890,6 +898,15 @@ async function loadLocation(location) {
       windSpeedText: period.windSpeed,
       metrics
     };
+  });
+
+  // Subtract estimated liquid equivalent of snowfall from quantitative precipitation (10:1 SLR).
+  hourly.forEach((entry) => {
+    const qpf = entry.metrics.quantitativePrecipitation;
+    const snow = entry.metrics.snowfallAmount;
+    if (qpf != null && snow != null) {
+      entry.metrics.quantitativePrecipitation = Math.max(0, qpf - snow / 10);
+    }
   });
 
   const now = new Date();
