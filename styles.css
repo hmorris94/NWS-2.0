@@ -458,6 +458,12 @@ canvas {
   margin-top: 8px;
 }
 
+.chart-group-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 .chart-group-legend {
   margin-bottom: 4px;
 }
