@@ -7,8 +7,17 @@ Subcommands:
 """
 
 import argparse
+import logging
+import sys
 import time
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+    stream=sys.stdout,
+)
 
 from flask import Flask
 

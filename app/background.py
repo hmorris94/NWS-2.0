@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -18,6 +19,8 @@ from .config import (
     NWS_INTERVAL_SECONDS,
 )
 from .nws_fetcher import fetch_all_locations
+
+logger = logging.getLogger(__name__)
 
 # Data directory and file paths
 DATA_DIR = PROJECT_ROOT / "server_side" / "data"
@@ -50,12 +53,12 @@ def nws_fetch_loop(stop_event: threading.Event) -> None:
     """Background thread to fetch NWS data periodically."""
     while not stop_event.is_set():
         try:
-            print(f"[NWS] Fetching data for {len(LOCATIONS)} locations...")
+            logger.info("[NWS] Fetching data for %d locations...", len(LOCATIONS))
             data = fetch_all_locations(LOCATIONS)
             write_json_atomic(data, LOCATIONS_FILE)
-            print(f"[NWS] Updated locations.json at {data['fetchedAt']}")
+            logger.info("[NWS] Updated locations.json at %s", data["fetchedAt"])
         except Exception as e:
-            print(f"[NWS] Error: {e}")
+            logger.error("[NWS] Fetch error: %s", e)
 
         # Wait for next interval or until stopped
         stop_event.wait(NWS_INTERVAL_SECONDS)
@@ -64,28 +67,29 @@ def nws_fetch_loop(stop_event: threading.Event) -> None:
 def hrrr_fetch_loop(stop_event: threading.Event) -> None:
     """Background thread to fetch HRRR/NBM data periodically."""
     if not ENABLE_HRRR:
-        print("[HRRR] Disabled via ENABLE_HRRR=False")
+        logger.info("[HRRR] Disabled via ENABLE_HRRR=False")
         return
 
     try:
         from .hrrr_nbm_dl import sync_hrrr_nbm_subsets
     except ImportError as e:
-        print(f"[HRRR] Could not import hrrr_nbm_dl: {e}")
+        logger.error("[HRRR] Could not import hrrr_nbm_dl: %s", e)
         return
 
     while not stop_event.is_set():
         try:
-            print(f"[HRRR] Syncing HRRR/NBM subsets...")
+            logger.info("[HRRR] Syncing HRRR/NBM subsets...")
             result = sync_hrrr_nbm_subsets(
                 locations=LOCATIONS,
                 cache_dir=HRRR_CACHE_DIR,
             )
-            print(
-                f"[HRRR] Synced: HRRR cycle {result['hrrr_cycle']}, "
-                f"NBM cycle {result['nbm_cycle']}"
+            logger.info(
+                "[HRRR] Synced: HRRR cycle %s, NBM cycle %s",
+                result["hrrr_cycle"],
+                result["nbm_cycle"],
             )
         except Exception as e:
-            print(f"[HRRR] Error: {e}")
+            logger.error("[HRRR] Fetch error: %s", e)
 
         # Wait for next interval or until stopped
         stop_event.wait(HRRR_INTERVAL_SECONDS)

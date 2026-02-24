@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 # Color palette for metrics (matches app.js)
 COLOR_PALETTE = [
@@ -524,7 +527,7 @@ def fetch_all_locations(
             data = fetch_location(location, sess)
             results.append(data)
         except Exception as e:
-            print(f"Error fetching {location['name']}: {e}")
+            logger.error("Error fetching %s: %s", location["name"], e)
             # Include location with error flag
             results.append(
                 {
