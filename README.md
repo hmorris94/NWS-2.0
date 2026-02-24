@@ -11,29 +11,31 @@ A lightweight NOAA/NWS forecast dashboard focused on a handful of locations with
 - Collapsible Forecast and Locations sections.
 - Day-by-day forecast cards with highs/lows.
 - Light/dark theme toggle.
-- Auto-refresh every 15 minutes.
-
-## Chart Interaction Notes
-
-- Charts use a retained scene: y-axis values are cached for the full series and each redraw reuses them.
-- Pan/zoom re-renders ticks and labels while reusing cached y positions for smooth interactions.
-- Vertical axes stay fixed to full-series min/max for each metric group.
 
 ## Quick Start
 
-Open `index.html` directly in a browser, or start a local server:
-
 ```bash
-python main.py               # client-only mode at http://localhost:5173
-python main.py --server      # server-side mode (background NWS fetching)
-python main.py --port 8080   # custom port
+pip install -r requirements.txt
+python main.py web              # server-side mode (background NWS fetching) at http://localhost:8081
+python main.py web --client     # client-only mode (browser fetches NWS directly)
+python main.py web --port 8080  # custom port
 ```
 
-No build step required—the project is intentionally dependency-light.
+No build step required.
+
+## Modes
+
+**Server-side (default):** A background thread pre-fetches NWS data every 30 minutes and writes it to `server_side/data/locations.json`. The browser polls `/data/locations.json` every 5 minutes. No direct NWS API calls from the browser.
+
+**Client-only (`--client`):** The browser fetches NWS data directly on load and refreshes every 15 minutes.
+
+## Configuration
+
+Edit `app/config.py` to change locations, refresh intervals, or enable HRRR/NBM downloads.
 
 ## Data Source
 
-Powered by the National Weather Service API (`api.weather.gov`).
+Powered by the National Weather Service API (`api.weather.gov`). No API key required.
 
 ## License
 

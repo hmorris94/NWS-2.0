@@ -281,7 +281,7 @@ if __name__ == "__main__":
 
     meta = sync_hrrr_nbm_subsets(
         locations=locations,
-        cache_dir="./wx_cache",
+        cache_dir=Path(__file__).resolve().parent.parent / "wx_cache",
         padding_km=50.0,
         # tighten to what you truly need while iterating:
         hrrr_fhrs=range(0, 19),
