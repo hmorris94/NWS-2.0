@@ -26,19 +26,32 @@ def create_blueprint(name="nws", config=None):
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     bp = Blueprint(name, __name__)
 
-    @bp.route("/")
-    def index():
-        return send_from_directory(PROJECT_ROOT, "index.html")
-
-    @bp.route("/<path:filename>")
-    def static_files(filename):
-        return send_from_directory(PROJECT_ROOT, filename)
-
     if cfg["server_side"]:
+        server_side_dir = PROJECT_ROOT / "server_side"
         data_dir = Path(cfg["data_dir"])
+
+        @bp.route("/")
+        def index():
+            if (server_side_dir / "index.html").exists():
+                return send_from_directory(server_side_dir, "index.html")
+            return send_from_directory(PROJECT_ROOT, "index.html")
+
+        @bp.route("/<path:filename>")
+        def static_files(filename):
+            if (server_side_dir / filename).exists():
+                return send_from_directory(server_side_dir, filename)
+            return send_from_directory(PROJECT_ROOT, filename)
 
         @bp.route("/data/<path:filename>")
         def data_files(filename):
             return send_from_directory(data_dir, filename)
+    else:
+        @bp.route("/")
+        def index():
+            return send_from_directory(PROJECT_ROOT, "index.html")
+
+        @bp.route("/<path:filename>")
+        def static_files(filename):
+            return send_from_directory(PROJECT_ROOT, filename)
 
     return bp

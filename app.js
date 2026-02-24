@@ -718,7 +718,15 @@ function sanitizeValue(value) {
   return value;
 }
 
-function getMetricColor(key, index) {
+function stableColorIndex(key) {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return hash % colorPalette.length;
+}
+
+function getMetricColor(key) {
   const normalized = key.toLowerCase();
   if (normalized.includes("quantitativeprecipitation")) return "#118ab2";
   if (normalized.includes("snow")) return "#00bcd4";
@@ -726,7 +734,9 @@ function getMetricColor(key, index) {
   if (normalized.includes("rain") || normalized.includes("liquid")) return "#00a676";
   if (normalized.includes("drizzle")) return "#f59e0b";
   if (normalized.includes("sleet") || normalized.includes("freezing")) return "#ef4444";
-  return colorPalette[index % colorPalette.length];
+  if (normalized.includes("humidity")) return "#06b6d4";
+  if (normalized.includes("windgust")) return "#7dd3fc";
+  return colorPalette[stableColorIndex(key)];
 }
 
 function buildDailyForecast(periods) {
@@ -734,7 +744,7 @@ function buildDailyForecast(periods) {
   periods.forEach((period) => {
     const date = new Date(period.startTime);
     if (Number.isNaN(date.getTime())) return;
-    const key = date.toISOString().slice(0, 10);
+    const key = period.startTime.slice(0, 10);
     const entry = days.get(key) || { date, day: null, night: null };
     if (period.isDaytime) entry.day = period;
     else entry.night = period;
@@ -928,7 +938,7 @@ async function loadLocation(location) {
       key: meta.key,
       label: meta.label,
       unit: meta.unit,
-      color: getMetricColor(meta.key, index)
+      color: getMetricColor(meta.key)
     }));
 
   const metricExtents = {};

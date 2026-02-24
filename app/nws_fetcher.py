@@ -181,7 +181,15 @@ def humanize_key(key: str) -> str:
     return result[0].upper() + result[1:] if result else key
 
 
-def get_metric_color(key: str, index: int) -> str:
+def stable_color_index(key: str) -> int:
+    """Derive a stable palette index from the metric key."""
+    h = 0
+    for ch in key:
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return h % len(COLOR_PALETTE)
+
+
+def get_metric_color(key: str) -> str:
     """Get color for a metric."""
     normalized = key.lower()
 
@@ -197,8 +205,12 @@ def get_metric_color(key: str, index: int) -> str:
         return "#f59e0b"
     if "sleet" in normalized or "freezing" in normalized:
         return "#ef4444"
+    if "humidity" in normalized:
+        return "#06b6d4"
+    if "windgust" in normalized:
+        return "#7dd3fc"
 
-    return COLOR_PALETTE[index % len(COLOR_PALETTE)]
+    return COLOR_PALETTE[stable_color_index(key)]
 
 
 def get_group_for_metric(metric: Dict) -> Dict:
@@ -243,7 +255,7 @@ def build_daily_forecast(periods: List[Dict]) -> List[Dict]:
         except (ValueError, TypeError):
             continue
 
-        key = date.strftime("%Y-%m-%d")
+        key = start_time[:10]
         if key not in days:
             days[key] = {"date": date, "day": None, "night": None}
 
@@ -448,7 +460,7 @@ def fetch_location(
                 "key": meta["key"],
                 "label": meta["label"],
                 "unit": meta["unit"],
-                "color": get_metric_color(meta["key"], i),
+                "color": get_metric_color(meta["key"]),
             }
         )
 
