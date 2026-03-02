@@ -49,6 +49,7 @@ EXCLUDED_METRICS = {
     "lowvisibilityoccurrenceriskindex",
     "atmosphericdispersionindex",
     "windchill",
+    "heatindex",
     "wetbulbglobetemperature",
     "waveheight",
 }
