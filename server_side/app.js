@@ -10,6 +10,8 @@ const state = {
   serverFetchedAt: null
 };
 
+const MIN_WINDOW = 6; // minimum zoom window in hours
+
 const NWS_STORAGE_VERSION = 1;
 const NWS_STORAGE_VERSION_KEY = "nws_v";
 
@@ -47,7 +49,7 @@ const colorPalette = [
 
 const labelOverrides = {
   probabilityOfPrecipitation: "Probability of Precipitation",
-  quantitativePrecipitation: "Precip Amount",
+  quantitativePrecipitation: "Precipitation Amount",
   windSpeed: "Wind Speed",
   windGust: "Wind Gust",
   skyCover: "Sky Cover",
@@ -472,8 +474,7 @@ function zoomWindow(targetWindow, anchorRatio) {
   const loc = state.data[state.selectedIndex];
   if (!loc) return;
   const maxWindow = Math.max(1, loc.hourly.length);
-  const minWindow = 1;
-  const nextWindow = clampWindowSize(targetWindow, maxWindow, minWindow);
+  const nextWindow = clampWindowSize(targetWindow, maxWindow, MIN_WINDOW);
   let nextStart = state.startIndex;
   if (nextWindow >= maxWindow) {
     nextStart = 0;
@@ -853,6 +854,13 @@ function buildOverlayScene(series, location) {
     head.textContent = `${group.label}${group.unit ? ` (${group.unit})` : ""}`;
     groupEl.appendChild(head);
 
+    if (group.id === "precip") {
+      const note = document.createElement("div");
+      note.className = "chart-group-note";
+      note.textContent = "Hourly-resolution precipitation accumulation is only available 66–72 hours in advance";
+      groupEl.appendChild(note);
+    }
+
     const canvas = document.createElement("canvas");
     canvas.height = 200;
     groupEl.appendChild(canvas);
@@ -1150,8 +1158,7 @@ function updateSliders() {
   const loc = state.data[state.selectedIndex];
   if (!loc) return;
   const maxWindow = Math.max(1, loc.hourly.length);
-  const minWindow = 1;
-  state.windowSize = Math.max(minWindow, Math.min(state.windowSize, maxWindow));
+  state.windowSize = Math.max(MIN_WINDOW, Math.min(state.windowSize, maxWindow));
   state.startIndex = clampStartIndex(state.startIndex, state.windowSize);
   updateTimelineMarkers();
 }
@@ -1291,11 +1298,11 @@ function attachTimelineDrag(marker, type) {
 
       const currentEnd = state.startIndex + state.windowSize - 1;
       if (type === "start") {
-        const clampedStart = Math.max(0, Math.min(nextIndex, currentEnd - 1));
+        const clampedStart = Math.max(0, Math.min(nextIndex, currentEnd - MIN_WINDOW + 1));
         state.startIndex = clampedStart;
         state.windowSize = currentEnd - state.startIndex + 1;
       } else {
-        const clampedEnd = Math.min(maxIndex, Math.max(nextIndex, state.startIndex + 1));
+        const clampedEnd = Math.min(maxIndex, Math.max(nextIndex, state.startIndex + MIN_WINDOW - 1));
         state.windowSize = clampedEnd - state.startIndex + 1;
       }
       updateSliders();
