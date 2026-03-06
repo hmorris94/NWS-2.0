@@ -50,6 +50,7 @@ EXCLUDED_METRICS = {
     "atmosphericdispersionindex",
     "windchill",
     "heatindex",
+    "heatrisk",
     "wetbulbglobetemperature",
     "waveheight",
 }

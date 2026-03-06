@@ -808,6 +808,7 @@ function shouldExcludeMetric(key) {
     normalized === "atmosphericdispersionindex" ||
     normalized === "windchill" ||
     normalized === "heatindex" ||
+    normalized === "heatrisk" ||
     normalized === "wetbulbglobetemperature" ||
     normalized === "waveheight"
   );
