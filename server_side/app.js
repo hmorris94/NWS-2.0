@@ -25,7 +25,6 @@ const markerStartEl = document.getElementById("markerStart");
 const markerEndEl = document.getElementById("markerEnd");
 const timeRangeEl = document.getElementById("timeRange");
 const chartsEl = document.getElementById("charts");
-const overlayNoteEl = document.getElementById("overlayNote");
 const forecastCardsEl = document.getElementById("forecastCards");
 const forecastSectionEl = document.getElementById("forecastSection");
 const forecastToggleEl = document.getElementById("forecastToggle");
@@ -58,6 +57,7 @@ const labelOverrides = {
 };
 
 const groupOrder = ["temperature", "precip-prob", "precip", "wind", "sky", "humidity", "pressure", "visibility"];
+const mergedUnitGroups = new Set(["wave"]);
 const overlayChartPadding = { top: 14, right: 10, bottom: 28, left: 38 };
 const overlayPadding = overlayChartPadding;
 
@@ -111,8 +111,10 @@ function getGroupForMetric(metric) {
   if (key.includes("visibility")) {
     return { id: "visibility", label: "Visibility" };
   }
-  const suffix = metric.unit ? ` (${metric.unit})` : "";
-  return { id: `other-${metric.unit || "misc"}`, label: `Other${suffix}` };
+  if (key.includes("wave")) {
+    return { id: "wave", label: "Wave" };
+  }
+  return { id: `other-${metric.unit || "misc"}`, label: "Other" };
 }
 
 
@@ -211,7 +213,7 @@ function setupCanvas(canvas) {
   return { ctx, width, height };
 }
 
-function normalizeExtent(min, max, unit) {
+function normalizeExtent(min, max, unit, groupId) {
   if (unit === "%") {
     min = 0;
     max = 100;
@@ -221,6 +223,9 @@ function normalizeExtent(min, max, unit) {
   }
   if (unit === "in") {
     max = Math.max(max, 0.05);
+  }
+  if (groupId === "wave") {
+    min = 0;
   }
   if (min === max) {
     min -= 1;
@@ -266,6 +271,24 @@ function drawYAxisLabels(ctx, min, max, precision, padding, chartHeight) {
       const label = max - ((max - min) / 4) * i;
       const y = padding.top + (chartHeight / 4) * i + 4;
       ctx.fillText(formatAxisValue(label, precision), padding.left - 8, y);
+    }
+  }
+  ctx.textAlign = "start";
+}
+
+function drawYAxisLabelsRight(ctx, min, max, precision, padding, chartHeight, width) {
+  const minLabel = formatAxisValue(min, precision);
+  const maxLabel = formatAxisValue(max, precision);
+  ctx.fillStyle = "#56566d";
+  ctx.font = "11px Space Grotesk";
+  ctx.textAlign = "left";
+  ctx.fillText(maxLabel, width - padding.right + 8, padding.top + 6);
+  ctx.fillText(minLabel, width - padding.right + 8, padding.top + chartHeight);
+  if (minLabel !== maxLabel) {
+    for (let i = 1; i < 4; i += 1) {
+      const label = max - ((max - min) / 4) * i;
+      const y = padding.top + (chartHeight / 4) * i + 4;
+      ctx.fillText(formatAxisValue(label, precision), width - padding.right + 8, y);
     }
   }
   ctx.textAlign = "start";
@@ -764,9 +787,6 @@ function renderCharts(location, rebuild = true) {
     chartScene.locationName = location.name;
 
     const series = buildFullSeries(location);
-    if (overlayNoteEl) {
-      overlayNoteEl.style.display = "block";
-    }
     buildOverlayScene(series, location);
   }
 
@@ -800,9 +820,9 @@ function buildOverlayScene(series, location) {
   series.forEach((metric) => {
     const group = getGroupForMetric(metric);
     const unitKey = metric.unit || "unitless";
-    const id = `${group.id}|${unitKey}`;
+    const id = mergedUnitGroups.has(group.id) ? group.id : `${group.id}|${unitKey}`;
     if (!grouped.has(id)) {
-      grouped.set(id, { ...group, unit: metric.unit, metrics: [] });
+      grouped.set(id, { ...group, unit: mergedUnitGroups.has(group.id) ? null : metric.unit, metrics: [] });
     }
     grouped.get(id).metrics.push(metric);
   });
@@ -851,7 +871,10 @@ function buildOverlayScene(series, location) {
 
     const head = document.createElement("div");
     head.className = "chart-group-head";
-    head.textContent = `${group.label}${group.unit ? ` (${group.unit})` : ""}`;
+    const unitSuffix = group.unit
+      ? ` (${group.unit})`
+      : (() => { const units = [...new Set(group.metrics.map((m) => m.unit).filter(Boolean))]; return units.length ? ` (${units.join(", ")})` : ""; })();
+    head.textContent = `${group.label}${unitSuffix}`;
     groupEl.appendChild(head);
 
     if (group.id === "precip") {
@@ -874,10 +897,31 @@ function buildOverlayScene(series, location) {
 
     const extentKey = `${group.id}|${group.unit || "unitless"}`;
     const fixedExtent = location.groupExtents?.[extentKey] || null;
+
+    let unitExtents = null;
+    if (mergedUnitGroups.has(group.id)) {
+      unitExtents = new Map();
+      group.metrics.forEach((metric) => {
+        const ext = location.metricExtents?.[metric.key];
+        if (!ext) return;
+        const u = metric.unit || "unitless";
+        if (!unitExtents.has(u)) {
+          unitExtents.set(u, { min: ext.min, max: ext.max });
+        } else {
+          unitExtents.get(u).min = Math.min(unitExtents.get(u).min, ext.min);
+          unitExtents.get(u).max = Math.max(unitExtents.get(u).max, ext.max);
+        }
+      });
+    }
+    const dualAxis = unitExtents !== null && unitExtents.size > 1;
+    const effectivePadding = dualAxis ? { ...overlayChartPadding, right: 38 } : overlayPadding;
+
     const instance = {
       groupId: group.id,
       label: group.label,
       unit: group.unit,
+      dualAxis,
+      unitExtents,
       canvas,
       ctx: canvas.getContext("2d"),
       series: group.metrics,
@@ -892,7 +936,7 @@ function buildOverlayScene(series, location) {
       type: "overlay",
       series: instance.series,
       times: instance.times,
-      padding: overlayPadding
+      padding: effectivePadding
     });
     attachPanZoom(canvas);
     chartScene.instances.push(instance);
@@ -900,14 +944,15 @@ function buildOverlayScene(series, location) {
 }
 
 function buildOverlayPaths(instance, layout) {
-  const { series, extent } = instance;
+  const { series, extent, unitExtents } = instance;
   const { padding, chartHeight } = layout;
-  const { min, max } = normalizeExtent(extent?.min ?? 0, extent?.max ?? 1, instance.unit);
 
   instance.yValues.clear();
   instance.lastNonNull.clear();
-  const range = max - min || 1;
   series.forEach((metric) => {
+    const ext = unitExtents?.get(metric.unit || "unitless") ?? extent;
+    const { min, max } = normalizeExtent(ext?.min ?? 0, ext?.max ?? 1, metric.unit || instance.unit, instance.groupId);
+    const range = max - min || 1;
     const yPositions = metric.values.map((value) => {
       if (value === null || value === undefined) return null;
       const yRatio = (value - min) / range;
@@ -928,7 +973,7 @@ function buildOverlayPaths(instance, layout) {
 function drawOverlayInstance(instance) {
   const { canvas, times, extent } = instance;
   const { ctx, width, height } = setupCanvas(canvas);
-  const padding = overlayChartPadding;
+  const padding = instance.dualAxis ? { ...overlayChartPadding, right: 38 } : overlayChartPadding;
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
   if (chartWidth <= 0 || chartHeight <= 0) return;
@@ -985,6 +1030,12 @@ function drawOverlayInstance(instance) {
   ctx.lineTo(padding.left, padding.top + chartHeight);
   ctx.lineTo(width - padding.right, padding.top + chartHeight);
   ctx.stroke();
+  if (instance.dualAxis) {
+    ctx.beginPath();
+    ctx.moveTo(width - padding.right, padding.top);
+    ctx.lineTo(width - padding.right, padding.top + chartHeight);
+    ctx.stroke();
+  }
 
   const midnightIndices = getMidnightIndices(windowTimes);
   midnightIndices.forEach((index) => {
@@ -1067,10 +1118,21 @@ function drawOverlayInstance(instance) {
     }
   });
 
-  const { min, max } = normalizeExtent(extent?.min ?? 0, extent?.max ?? 1, instance.unit);
-  const axisPrecision = instance.unit === "in" ? 2 : 0;
+  if (instance.dualAxis && instance.unitExtents) {
+    const leftUnit = instance.unitExtents.has("ft") ? "ft" : Array.from(instance.unitExtents.keys())[0];
+    const rightUnit = Array.from(instance.unitExtents.keys()).find((u) => u !== leftUnit);
+    const leftExt = instance.unitExtents.get(leftUnit);
+    const rightExt = instance.unitExtents.get(rightUnit);
+    const { min: lMin, max: lMax } = normalizeExtent(leftExt.min, leftExt.max, leftUnit, instance.groupId);
+    const { min: rMin, max: rMax } = normalizeExtent(rightExt.min, rightExt.max, rightUnit, instance.groupId);
+    drawYAxisLabels(ctx, lMin, lMax, 0, padding, chartHeight);
+    drawYAxisLabelsRight(ctx, rMin, rMax, 0, padding, chartHeight, width);
+  } else {
+    const { min, max } = normalizeExtent(extent?.min ?? 0, extent?.max ?? 1, instance.unit, instance.groupId);
+    const axisPrecision = instance.unit === "in" ? 2 : 0;
+    drawYAxisLabels(ctx, min, max, axisPrecision, padding, chartHeight);
+  }
 
-  drawYAxisLabels(ctx, min, max, axisPrecision, padding, chartHeight);
   drawXAxisLabels(ctx, windowTimes, windowTimes.length, padding, chartWidth, width, height, windowOffset, span);
 
   if (drewLine) {
@@ -1080,6 +1142,12 @@ function drawOverlayInstance(instance) {
     ctx.moveTo(padding.left, padding.top);
     ctx.lineTo(padding.left, padding.top + chartHeight);
     ctx.stroke();
+    if (instance.dualAxis) {
+      ctx.beginPath();
+      ctx.moveTo(width - padding.right, padding.top);
+      ctx.lineTo(width - padding.right, padding.top + chartHeight);
+      ctx.stroke();
+    }
   }
 }
 

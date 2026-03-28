@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 
 import requests
@@ -65,7 +66,7 @@ def bbox_from_points(points: Sequence[Tuple[float, float]], padding_km: float = 
     pad_lat = padding_km / 111.0
     # 1 deg lon ~ 111*cos(lat) km; use mid-lat for conversion
     mid_lat = 0.5 * (bottom + top)
-    pad_lon = padding_km / (111.0 * max(0.1, abs(__import__("math").cos(__import__("math").radians(mid_lat)))))
+    pad_lon = padding_km / (111.0 * max(0.1, abs(math.cos(math.radians(mid_lat)))))
 
     return BBox(
         leftlon=left - pad_lon,

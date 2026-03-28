@@ -52,7 +52,8 @@ EXCLUDED_METRICS = {
     "heatindex",
     "heatrisk",
     "wetbulbglobetemperature",
-    "waveheight",
+    "twentyfootwinddirection",
+    "stability",
 }
 
 # Group order for chart grouping
@@ -70,7 +71,7 @@ GROUP_ORDER = [
 
 def normalize_uom(uom: str) -> Tuple[str, callable]:
     """Normalize unit of measure and return conversion function."""
-    cleaned = (uom or "").replace("wmoUnit:", "").replace("unit:", "")
+    cleaned = (uom or "").replace("wmoUnit:", "").replace("nwsUnit:", "").replace("unit:", "")
 
     if cleaned == "percent":
         return ("%", lambda v: v)
@@ -241,9 +242,10 @@ def get_group_for_metric(metric: Dict) -> Dict:
         return {"id": "pressure", "label": "Pressure"}
     if "visibility" in key:
         return {"id": "visibility", "label": "Visibility"}
+    if "wave" in key:
+        return {"id": "wave", "label": "Wave"}
 
-    suffix = f" ({metric.get('unit')})" if metric.get("unit") else ""
-    return {"id": f"other-{metric.get('unit') or 'misc'}", "label": f"Other{suffix}"}
+    return {"id": f"other-{metric.get('unit') or 'misc'}", "label": "Other"}
 
 
 def build_daily_forecast(periods: List[Dict]) -> List[Dict]:
@@ -377,6 +379,8 @@ def fetch_location(
             continue
 
         unit, convert = normalize_uom(prop.get("uom", ""))
+        if key.lower() == "waveheight":
+            unit, convert = "ft", lambda v: v * 3.28084
         if not unit and "probability" in key.lower():
             unit = "%"
 
@@ -453,6 +457,13 @@ def fetch_location(
         if any(
             entry["metrics"].get(meta["key"]) is not None
             for entry in hourly
+        )
+        and not (
+            meta["key"].lower() == "waveheight"
+            and all(
+                entry["metrics"].get(meta["key"]) in (None, 0, 0.0)
+                for entry in hourly
+            )
         )
     ]
 
